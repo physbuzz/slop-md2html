@@ -8,6 +8,7 @@ from pathlib import Path
 from .builder import MarkdownSiteBuilder, load_options
 from .config import load_config_file
 from .errors import Md2HtmlError
+from .paths import dedupe_paths, is_ignored
 from .watch import serve_and_watch, watch_jobs
 
 _HTML_SUFFIXES = {".html", ".htm"}
@@ -21,34 +22,6 @@ def _path_list(value) -> list[Path]:
     return [Path(v) for v in value]
 
 
-def _resolve_lenient(path: Path) -> Path:
-    return path.expanduser().resolve(strict=False)
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
-def _dedupe(paths: Iterable[Path]) -> list[Path]:
-    seen: set[Path] = set()
-    out: list[Path] = []
-    for path in paths:
-        resolved = _resolve_lenient(path)
-        if resolved not in seen:
-            seen.add(resolved)
-            out.append(resolved)
-    return out
-
-
-def _is_ignored(path: Path, ignored_roots: Iterable[Path]) -> bool:
-    resolved = _resolve_lenient(path)
-    return any(_is_relative_to(resolved, _resolve_lenient(root)) for root in ignored_roots)
-
-
 def _explicit_output_dir(output: Path | None) -> Path | None:
     if output is None:
         return None
@@ -60,17 +33,17 @@ def _explicit_output_dir(output: Path | None) -> Path | None:
 
 def discover_sources(paths: list[Path], *, recursive: bool, exclude_dirs: Iterable[Path] = ()) -> list[Path]:
     sources: list[Path] = []
-    excludes = _dedupe(exclude_dirs)
+    excludes = dedupe_paths(exclude_dirs)
     for path in paths:
         path = path.expanduser()
-        if _is_ignored(path, excludes):
+        if is_ignored(path, excludes):
             continue
         if path.is_dir():
             pattern = "**/*.md" if recursive else "*.md"
             candidates = sorted(path.glob(pattern))
-            sources.extend(src for src in candidates if src.is_file() and not _is_ignored(src, excludes))
+            sources.extend(src for src in candidates if src.is_file() and not is_ignored(src, excludes))
         elif path.exists():
-            if not _is_ignored(path, excludes):
+            if not is_ignored(path, excludes):
                 sources.append(path)
         else:
             raise FileNotFoundError(path)
@@ -118,7 +91,7 @@ def output_exclusions(output: Path | None, sources: list[Path], jobs: list[tuple
         else:
             ignored_files.append(output)
     ignored_files.extend(out for _src, out in jobs)
-    return _dedupe(ignored_roots), _dedupe(ignored_files)
+    return dedupe_paths(ignored_roots), dedupe_paths(ignored_files)
 
 
 def watch_roots_from_inputs(input_roots: list[Path]) -> list[Path]:
@@ -129,7 +102,7 @@ def watch_roots_from_inputs(input_roots: list[Path]) -> list[Path]:
             roots.append(expanded)
         elif expanded.exists():
             roots.append(expanded.parent)
-    return _dedupe(roots or [Path.cwd()])
+    return dedupe_paths(roots or [Path.cwd()])
 
 
 def _config_inputs(config_path: Path) -> tuple[list[Path], Path | None, bool]:
@@ -200,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         explicit_dir = _explicit_output_dir(output)
         if explicit_dir is not None:
             pre_excludes.append(explicit_dir)
-        pre_excludes = _dedupe(pre_excludes)
+        pre_excludes = dedupe_paths(pre_excludes)
 
         def make_jobs() -> list[tuple[Path, Path]]:
             current_sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=pre_excludes)

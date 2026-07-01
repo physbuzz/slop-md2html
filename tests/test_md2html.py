@@ -4,11 +4,11 @@ from pathlib import Path
 
 from md2html.builder import MarkdownSiteBuilder
 from md2html.cli import build_jobs, discover_sources, output_exclusions
-from md2html.code import parse_src_directive
 from md2html.config import BuildOptions
-from md2html.math import protect_math, restore_math
-from md2html.slug import Slugger
-from md2html.toc import collect_headings, generate_toc
+from md2html.directives import iter_include_paths, iter_src_directives, parse_src_directive
+from md2html.frontmatter import dump_frontmatter, split_frontmatter
+from md2html.paths import source_output_path
+from md2html.rendering import Slugger, collect_headings, generate_toc, protect_math, restore_math
 from md2html.watch import WatchExclusions
 
 
@@ -50,6 +50,43 @@ def test_toc_compacts_exercises():
     assert "Solution" not in toc
 
 
+def test_frontmatter_without_metadata_returns_original_body():
+    body = "# Plain note\n\nNo metadata.\n"
+    metadata, parsed = split_frontmatter(body)
+
+    assert metadata == {}
+    assert parsed == body
+
+
+def test_frontmatter_parses_yaml_metadata_through_wrapper():
+    metadata, body = split_frontmatter("---\ntitle: Test\nstylesheets:\n  - a.css\n---\n\n# Body\n")
+
+    assert metadata == {"title": "Test", "stylesheets": ["a.css"]}
+    assert body == "\n# Body\n"
+
+
+def test_dump_frontmatter_round_trips_common_metadata():
+    dumped = dump_frontmatter({"title": "Round Trip", "draft": False, "tags": ["one", "two"]})
+    metadata, body = split_frontmatter(dumped + "Body\n")
+
+    assert metadata == {"title": "Round Trip", "draft": False, "tags": ["one", "two"]}
+    assert body == "\nBody\n"
+
+
+def test_included_files_ignore_frontmatter_metadata(tmp_path: Path):
+    partial = tmp_path / "partial.md"
+    page = tmp_path / "page.md"
+    partial.write_text("---\ntitle: Included Title\n---\n\nIncluded body\n", encoding="utf-8")
+    page.write_text("---\ntitle: Page Title\n---\n\n@include(partial.md)\n", encoding="utf-8")
+
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path)).build_file(page, tmp_path / "page.html")
+    html = (tmp_path / "page.html").read_text(encoding="utf-8")
+
+    assert result.metadata == {"title": "Page Title"}
+    assert "Included body" in html
+    assert "Included Title" not in html
+
+
 def test_src_flag_policy():
     plain = parse_src_directive("code/example.py")
     assert not plain.collapsed
@@ -65,6 +102,17 @@ def test_src_flag_policy():
     assert collapsed.collapsed
     assert collapsed.collapsible
     assert not collapsed.expanded_by_default
+
+
+def test_directive_scanning_uses_shared_parsers():
+    md = '@include("partials/intro.md")\n\n@src("code/example.py", collapsed, caption="Example")\n'
+
+    assert list(iter_include_paths(md)) == ["partials/intro.md"]
+    src_directives = list(iter_src_directives(md))
+    assert len(src_directives) == 1
+    assert src_directives[0].path == "code/example.py"
+    assert src_directives[0].collapsed
+    assert src_directives[0].options["caption"] == "Example"
 
 
 def test_builder_renders_includes_images_toc_and_code(tmp_path: Path):
@@ -187,6 +235,13 @@ def test_dry_run_with_execute_does_not_create_out_file(tmp_path: Path):
     assert not out.exists()
     assert not (tmp_path / "code" / "hello.out").exists()
     assert (tmp_path / "code" / "hello.out").resolve() in result.dependencies
+
+
+def test_source_output_path_uses_configured_suffix_consistently(tmp_path: Path):
+    src = tmp_path / "code" / "hello.py"
+    assert source_output_path(src, ".run") == tmp_path / "code" / "hello.run"
+    assert source_output_path(src, ".out") == tmp_path / "code" / "hello.out"
+    assert source_output_path(src, "-output.txt") == tmp_path / "code" / "hello.py-output.txt"
 
 
 def test_watch_exclusions_ignore_generated_code_outputs_when_execute_is_enabled(tmp_path: Path):

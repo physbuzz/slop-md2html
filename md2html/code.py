@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import html
 import os
 import shlex
@@ -8,65 +7,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from .context import BuildContext
+from .directives import SrcDirective, parse_directive_parts, parse_src_directive
 from .errors import DirectiveError
-from .highlighting import highlight_code, language_for_path
-
-
-@dataclass
-class SrcDirective:
-    path: str
-    flags: set[str] = field(default_factory=set)
-    options: dict[str, str] = field(default_factory=dict)
-
-    @property
-    def collapsed(self) -> bool:
-        return "collapsed" in self.flags
-
-    @property
-    def collapsible(self) -> bool:
-        return self.collapsed or "collapsible" in self.flags
-
-    @property
-    def expanded_by_default(self) -> bool:
-        # User-facing policy:
-        #   @src(file)              -> plain expanded code, not collapsible
-        #   @src(file, collapsible) -> collapsible and initially expanded
-        #   @src(file, collapsed)   -> collapsible and initially collapsed
-        return self.collapsible and not self.collapsed
-
-
-def _parse_parts(arg_string: str) -> list[str]:
-    try:
-        return [part.strip() for part in next(csv.reader([arg_string], skipinitialspace=True)) if part.strip()]
-    except Exception:
-        return [part.strip() for part in arg_string.split(",") if part.strip()]
-
-
-def parse_src_directive(arg_string: str) -> SrcDirective:
-    parts = _parse_parts(arg_string)
-    if not parts:
-        raise DirectiveError("@src requires a path")
-    path = parts[0].strip().strip('"\'')
-    flags: set[str] = set()
-    options: dict[str, str] = {}
-    for part in parts[1:]:
-        if "=" in part:
-            key, value = part.split("=", 1)
-            options[key.strip().lower()] = value.strip().strip('"\'')
-        else:
-            flags.add(part.strip().lower())
-    return SrcDirective(path=path, flags=flags, options=options)
+from .paths import source_output_path
+from .rendering import highlight_code, language_for_path
 
 
 def _output_path_for_source(src: Path, ctx: BuildContext) -> Path:
-    suffix = ctx.options.code.output_suffix
-    if suffix.startswith("."):
-        return src.with_suffix(suffix)
-    return src.with_name(src.name + suffix)
+    return source_output_path(src, ctx.options.code.output_suffix)
 
 
 def _command_from_config(src: Path, ctx: BuildContext) -> list[str] | None:
@@ -260,7 +211,7 @@ def expand_code_directives(text: str, ctx: BuildContext) -> str:
             continue
         if stripped.startswith("@src-begin(") and stripped.endswith(")"):
             arg_string = stripped[len("@src-begin(") : -1]
-            parts = _parse_parts(arg_string)
+            parts = parse_directive_parts(arg_string)
             lang = parts[0] if parts else "text"
             flags = {part.lower() for part in parts[1:]}
             block: list[str] = []

@@ -12,6 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "md2html contributors" }]
 dependencies = [
   "mistune>=3.0",
+  "python-frontmatter>=1.1",
   "Pygments>=2.15",
   "PyYAML>=6.0",
   "Jinja2>=3.1",

@@ -1,0 +1,452 @@
+from __future__ import annotations
+
+import html
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import mistune
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pygments import highlight
+from pygments.formatters import HtmlFormatter
+from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
+from pygments.util import ClassNotFound
+
+from .config import BuildOptions, MathConfig
+from .context import BuildContext
+from .resources import package_resource_path
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_LINK_RE = re.compile(r"!?\[([^\]]+)\]\([^\)]*\)")
+_MARKDOWN_MARK_RE = re.compile(r"[`*_~]+")
+_HEADING_RE = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+?)\s*#*\s*$")
+_TOC_RE = re.compile(r"^\s*@toc\s*$", re.MULTILINE)
+_EXERCISE_RE = re.compile(r"^exercise\b", re.IGNORECASE)
+_FENCE_RE = re.compile(r"(```.*?```|~~~.*?~~~)", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"(`+)(.*?)(?<!`)\1", re.DOTALL)
+_OBSIDIAN_IMAGE_RE = re.compile(r"!\[\[(?P<body>[^\]]+)\]\]")
+_ASSETS_DIR = package_resource_path("assets")
+_DEFAULT_TEMPLATE_DIR = package_resource_path("default_templates")
+
+_SUFFIX_LANG = {
+    ".py": "python",
+    ".rkt": "rkt",
+    ".scm": "scheme",
+    ".ss": "scheme",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".c": "c",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".html": "html",
+    ".css": "css",
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".md": "markdown",
+}
+
+
+def plain_text(value: str) -> str:
+    value = html.unescape(value)
+    value = _TAG_RE.sub("", value)
+    value = _LINK_RE.sub(lambda m: m.group(1), value)
+    value = _MARKDOWN_MARK_RE.sub("", value)
+    return value.strip()
+
+
+def slugify(value: str) -> str:
+    value = plain_text(value).lower()
+    value = value.replace("&", " and ")
+    value = re.sub(r"[^a-z0-9\s-]", "", value)
+    value = re.sub(r"[\s_]+", "-", value)
+    value = re.sub(r"-+", "-", value).strip("-")
+    return value or "section"
+
+
+@dataclass
+class Slugger:
+    counts: dict[str, int] = field(default_factory=dict)
+
+    def slug(self, value: str) -> str:
+        base = slugify(value)
+        count = self.counts.get(base, 0)
+        self.counts[base] = count + 1
+        if count == 0:
+            return base
+        return f"{base}-{count + 1}"
+
+
+@dataclass(frozen=True)
+class TocHeading:
+    level: int
+    title: str
+    id: str
+    line: int
+
+    @property
+    def text(self) -> str:
+        return plain_text(self.title).strip()
+
+
+def collect_headings(markdown_text: str) -> list[TocHeading]:
+    slugger = Slugger()
+    headings: list[TocHeading] = []
+    in_fence = False
+    fence_marker = ""
+
+    for lineno, line in enumerate(markdown_text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker
+            elif marker == fence_marker:
+                in_fence = False
+            continue
+        if in_fence:
+            continue
+        match = _HEADING_RE.match(line)
+        if not match:
+            continue
+        raw_title = match.group("title").strip()
+        text_title = plain_text(raw_title).strip()
+        if not text_title or text_title.lower() == "solution":
+            continue
+        headings.append(TocHeading(level=len(match.group("marks")), title=raw_title, id=slugger.slug(raw_title), line=lineno))
+    return headings
+
+
+def _link(heading: TocHeading, *, extra_class: str | None = None) -> str:
+    klass = f' class="{html.escape(extra_class, quote=True)}"' if extra_class else ""
+    return f'<a href="#{html.escape(heading.id, quote=True)}"{klass}>{html.escape(heading.text)}</a>'
+
+
+def _exercise_list(headings: list[TocHeading]) -> str:
+    if not headings:
+        return ""
+    links = "\n".join(f'<span>{_link(h)}</span>' for h in headings)
+    return '<div class="exercise-container">(<span class="exercise-list">\n' f'{links}\n' '</span>)\n</div>'
+
+
+def generate_toc(headings: list[TocHeading], *, title: str = "Directory") -> str:
+    if not headings:
+        return ""
+
+    exercises = [h for h in headings if _EXERCISE_RE.match(h.text)]
+    exercise_ids = {h.id for h in exercises}
+    lines = ['<div class="table-of-contents">', f'<h2>{html.escape(title)}</h2>', '<ul class="toc-list">']
+    stack: list[int] = []
+
+    def close_to(level: int) -> None:
+        while stack and stack[-1] >= level:
+            lines.append("</ul>")
+            stack.pop()
+
+    for heading in headings:
+        if heading.id in exercise_ids:
+            continue
+        text = heading.text.lower()
+        is_exercises = text == "exercises"
+        level = heading.level
+        if not stack:
+            lines.append("<ul>")
+            stack.append(level)
+        elif level > stack[-1]:
+            while stack[-1] < level:
+                lines.append("<ul>")
+                stack.append(stack[-1] + 1)
+        elif level < stack[-1]:
+            close_to(level + 1)
+        if is_exercises:
+            lines.append(f'<li>{_link(heading, extra_class="toc-exercises")}')
+            lines.append(_exercise_list(exercises))
+            lines.append("</li>")
+        else:
+            lines.append(f"<li>{_link(heading)}</li>")
+
+    while stack:
+        lines.append("</ul>")
+        stack.pop()
+    lines.extend(["</ul>", "</div>"])
+    return "\n".join(lines)
+
+
+def replace_toc(markdown_text: str, toc_html: str) -> str:
+    return _TOC_RE.sub(lambda _m: "\n" + toc_html + "\n", markdown_text)
+
+
+def prepare_toc(markdown_text: str) -> tuple[str, list[TocHeading], str]:
+    headings = collect_headings(markdown_text)
+    toc_html = generate_toc(headings)
+    return replace_toc(markdown_text, toc_html), headings, toc_html
+
+
+@dataclass(frozen=True)
+class MathSpan:
+    placeholder: str
+    text: str
+    display: bool
+
+
+def _protect_code(text: str) -> tuple[str, dict[str, str]]:
+    stored: dict[str, str] = {}
+
+    def store(match: re.Match[str]) -> str:
+        key = f"@@MD2HTML_CODE_{len(stored)}@@"
+        stored[key] = match.group(0)
+        return key
+
+    text = _FENCE_RE.sub(store, text)
+    text = _INLINE_CODE_RE.sub(store, text)
+    return text, stored
+
+
+def _restore_code(text: str, stored: dict[str, str]) -> str:
+    for key, value in stored.items():
+        text = text.replace(key, value)
+    return text
+
+
+def protect_math(text: str) -> tuple[str, list[MathSpan]]:
+    text, code = _protect_code(text)
+    spans: list[MathSpan] = []
+    out: list[str] = []
+    i = 0
+    n = len(text)
+
+    def add_span(raw: str, display: bool) -> str:
+        placeholder = f"@@MD2HTML_MATH_{len(spans)}@@"
+        spans.append(MathSpan(placeholder, raw, display))
+        return placeholder
+
+    while i < n:
+        if text.startswith("$$", i) and (i == 0 or text[i - 1] != "\\"):
+            end = text.find("$$", i + 2)
+            if end != -1:
+                raw = text[i : end + 2]
+                out.append(add_span(raw, True))
+                i = end + 2
+                continue
+        if text[i] == "$" and (i == 0 or text[i - 1] != "\\"):
+            if i + 1 < n and text[i + 1] not in " \t\n$":
+                j = i + 1
+                matched_inline = False
+                while True:
+                    end = text.find("$", j)
+                    if end == -1:
+                        break
+                    if text[end - 1] != "\\" and end > i + 1:
+                        raw = text[i : end + 1]
+                        if "\n\n" not in raw:
+                            out.append(add_span(raw, False))
+                            i = end + 1
+                            matched_inline = True
+                            break
+                    j = end + 1
+                if matched_inline:
+                    continue
+        out.append(text[i])
+        i += 1
+
+    protected = "".join(out)
+    protected = _restore_code(protected, code)
+    return protected, spans
+
+
+def render_math_span(span: MathSpan, config: MathConfig, *, output_mode: str = "html") -> str:
+    raw = span.text
+    source = raw[2:-2].strip() if span.display and raw.startswith("$$") else raw[1:-1]
+    data_tex = html.escape(source, quote=True).replace("\n", "&#10;")
+    rendered_source = html.escape(raw)
+
+    if output_mode == "jekyll" and span.display:
+        return f'<div class="math display" data-tex="{data_tex}">{rendered_source}</div>'
+    if span.display:
+        return f'<div class="math display" data-tex="{data_tex}">{rendered_source}</div>'
+    return f'<span class="math inline" data-tex="{data_tex}">{rendered_source}</span>'
+
+
+def restore_math(html_text: str, spans: list[MathSpan], config: MathConfig, *, output_mode: str = "html") -> str:
+    for span in spans:
+        rendered = render_math_span(span, config, output_mode=output_mode)
+        if span.display:
+            pattern = re.compile(r"<p>\s*" + re.escape(span.placeholder) + r"\s*</p>")
+            html_text = pattern.sub(lambda _m, rendered=rendered: rendered, html_text)
+        html_text = html_text.replace(span.placeholder, rendered)
+    return html_text
+
+
+def _parse_image_parts(body: str) -> tuple[str, dict[str, str]]:
+    parts = [p.strip() for p in body.split("|")]
+    target = parts[0]
+    attrs: dict[str, str] = {}
+    for part in parts[1:]:
+        if not part:
+            continue
+        if "=" in part:
+            key, value = part.split("=", 1)
+            attrs[key.strip().lower()] = value.strip().strip('"\'')
+        elif part.isdigit() or part.endswith("%") or part.endswith("px"):
+            attrs["width"] = part
+        else:
+            attrs.setdefault("alt", part)
+    return target, attrs
+
+
+def _looks_like_percent(value: str) -> bool:
+    return bool(re.fullmatch(r"\d+(?:\.\d+)?%", value.strip()))
+
+
+def _normalize_width(value: str) -> str:
+    value = value.strip()
+    if value.isdigit():
+        return f"{value}px"
+    return value
+
+
+def process_obsidian_images(text: str, ctx: BuildContext, *, current_file: Path | None = None) -> str:
+    def repl(match: re.Match[str]) -> str:
+        target, attrs = _parse_image_parts(match.group("body"))
+        url = ctx.asset_url(target, current_file=current_file)
+        alt = attrs.get("alt") or Path(target).stem.replace("-", " ").replace("_", " ")
+        classes = ["obsidian-image"]
+        default_class = ctx.options.images.class_name
+        if default_class:
+            classes.append(default_class)
+        if attrs.get("class"):
+            classes.extend(attrs["class"].split())
+        width = attrs.get("width") or ctx.options.images.width
+        attr_bits = [f'src="{html.escape(url, quote=True)}"', f'alt="{html.escape(alt, quote=True)}"']
+        if classes:
+            attr_bits.append(f'class="{html.escape(" ".join(classes), quote=True)}"')
+        if width:
+            width = _normalize_width(width)
+            if _looks_like_percent(width) or width.endswith("px") or width.endswith("em") or width.endswith("rem"):
+                attr_bits.append(f'style="width: {html.escape(width, quote=True)};"')
+            else:
+                attr_bits.append(f'width="{html.escape(width, quote=True)}"')
+        return "<img " + " ".join(attr_bits) + ">"
+
+    return _OBSIDIAN_IMAGE_RE.sub(repl, text)
+
+
+def language_for_path(path: str | Path) -> str:
+    return _SUFFIX_LANG.get(Path(path).suffix.lower(), "text")
+
+
+def _lexer(lang: str | None, *, filename: str | None = None):
+    if lang:
+        lang = lang.strip().split()[0]
+        if lang:
+            try:
+                return get_lexer_by_name(lang)
+            except ClassNotFound:
+                pass
+    if filename:
+        try:
+            return get_lexer_for_filename(filename)
+        except ClassNotFound:
+            pass
+    return TextLexer()
+
+
+def highlight_code(code: str, lang: str | None = None, *, filename: str | None = None) -> str:
+    lexer = _lexer(lang, filename=filename)
+    formatter = HtmlFormatter(cssclass="codehilite")
+    try:
+        return highlight(code, lexer, formatter)
+    except Exception:
+        escaped = html.escape(code)
+        return f'<div class="codehilite"><pre><code>{escaped}</code></pre></div>\n'
+
+
+def pygments_css(style: str = "default") -> str:
+    return HtmlFormatter(style=style, cssclass="codehilite").get_style_defs(".codehilite")
+
+
+class Md2HtmlRenderer(mistune.HTMLRenderer):
+    def __init__(self, ctx: BuildContext | None = None) -> None:
+        super().__init__(escape=False)
+        self.ctx = ctx
+        self.slugger = Slugger()
+
+    def heading(self, text: str, level: int, **attrs) -> str:
+        ident = attrs.get("id") or self.slugger.slug(text)
+        return f'<h{level} id="{html.escape(ident, quote=True)}">{text}</h{level}>\n'
+
+    def block_code(self, code: str, info: str | None = None) -> str:
+        lang = None
+        if info:
+            lang = info.strip().split(None, 1)[0]
+        return highlight_code(code, lang)
+
+    def image(self, text: str, url: str, title: str | None = None) -> str:
+        final_url = url
+        if self.ctx is not None:
+            final_url = self.ctx.asset_url(url, current_file=self.ctx.source_path)
+        attrs = [f'src="{html.escape(final_url, quote=True)}"', f'alt="{html.escape(text or "", quote=True)}"']
+        if title:
+            attrs.append(f'title="{html.escape(title, quote=True)}"')
+        return "<img " + " ".join(attrs) + ">"
+
+
+def render_markdown(markdown_text: str, ctx: BuildContext | None = None) -> str:
+    renderer = Md2HtmlRenderer(ctx)
+    markdown = mistune.create_markdown(
+        renderer=renderer,
+        plugins=["table", "strikethrough", "task_lists", "url"],
+        escape=False,
+    )
+    return markdown(markdown_text)
+
+
+def base_css() -> str:
+    return (_ASSETS_DIR / "base.css").read_text(encoding="utf-8")
+
+
+def make_environment(options: BuildOptions) -> Environment:
+    dirs = [*(str(p) for p in options.template_dirs), str(_DEFAULT_TEMPLATE_DIR)]
+    return Environment(
+        loader=FileSystemLoader(dirs),
+        autoescape=select_autoescape(["html", "xml"]),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+
+
+def render_template(
+    *,
+    content: str,
+    title: str,
+    metadata: dict[str, Any],
+    options: BuildOptions,
+    template_name: str | None = None,
+) -> str:
+    env = make_environment(options)
+    name = template_name or ("jekyll.html" if options.output_mode == "jekyll" else options.template)
+    template = env.get_template(name)
+    css = ""
+    stylesheets: list[str] = []
+    if options.embed_assets:
+        css = pygments_css() + "\n\n" + base_css()
+    else:
+        stylesheets = metadata.get("stylesheets", []) or []
+    return template.render(
+        content=content,
+        title=title,
+        frontmatter=metadata,
+        metadata=metadata,
+        embedded_css=css,
+        stylesheets=stylesheets,
+        use_mathjax=options.math.backend == "mathjax",
+        lang=metadata.get("lang", "en"),
+        layout=metadata.get("layout", "post"),
+    )

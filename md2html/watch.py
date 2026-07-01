@@ -12,6 +12,7 @@ from pathlib import Path
 from .builder import MarkdownSiteBuilder
 from .errors import Md2HtmlError
 from .graph import build_dependency_graph
+from .paths import dedupe_paths, is_relative_to, resolve_lenient
 
 Job = tuple[Path, Path]
 JobProvider = Callable[[], list[Job]]
@@ -28,34 +29,11 @@ _IGNORED_DIR_NAMES = {
 }
 
 
-def _resolve_lenient(path: Path) -> Path:
-    return path.expanduser().resolve(strict=False)
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
-def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
-    seen: set[Path] = set()
-    out: list[Path] = []
-    for path in paths:
-        resolved = _resolve_lenient(path)
-        if resolved not in seen:
-            out.append(resolved)
-            seen.add(resolved)
-    return out
-
-
 def _prune_nested_roots(paths: Iterable[Path]) -> list[Path]:
-    roots = sorted(_dedupe_paths(paths), key=lambda p: (len(p.parts), str(p)))
+    roots = sorted(dedupe_paths(paths), key=lambda p: (len(p.parts), str(p)))
     pruned: list[Path] = []
     for root in roots:
-        if any(_is_relative_to(root, existing) for existing in pruned):
+        if any(is_relative_to(root, existing) for existing in pruned):
             continue
         pruned.append(root)
     return pruned
@@ -77,21 +55,21 @@ class WatchExclusions:
     ) -> "WatchExclusions":
         return cls(
             ignored_roots=tuple(_prune_nested_roots(roots)),
-            ignored_files=tuple(_dedupe_paths(files)),
+            ignored_files=tuple(dedupe_paths(files)),
             ignored_suffixes=tuple(s for s in suffixes if s),
         )
 
     def ignores(self, raw_path: str | Path | None) -> bool:
         if raw_path is None:
             return False
-        path = _resolve_lenient(Path(raw_path))
+        path = resolve_lenient(Path(raw_path))
         if any(part in _IGNORED_DIR_NAMES for part in path.parts):
             return True
         if any(str(path).endswith(suffix) for suffix in self.ignored_suffixes):
             return True
         if any(path == file for file in self.ignored_files):
             return True
-        return any(_is_relative_to(path, root) for root in self.ignored_roots)
+        return any(is_relative_to(path, root) for root in self.ignored_roots)
 
 
 class _ChangeBuffer:
@@ -103,7 +81,7 @@ class _ChangeBuffer:
         with self._lock:
             for raw_path in paths:
                 if raw_path is not None:
-                    self._paths.add(_resolve_lenient(Path(raw_path)))
+                    self._paths.add(resolve_lenient(Path(raw_path)))
 
     def pop_all(self) -> list[Path]:
         with self._lock:

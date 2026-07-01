@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import BuildOptions
+from .paths import resolve_lenient, resolve_markdown_reference
 
 
 @dataclass
@@ -41,10 +42,7 @@ class BuildContext:
         return self.options.project_root
 
     def add_dependency(self, path: Path) -> None:
-        try:
-            self.dependencies.add(path.resolve())
-        except FileNotFoundError:
-            self.dependencies.add(path.absolute())
+        self.dependencies.add(resolve_lenient(path))
 
     def warn(self, message: str, *, path: Path | None = None, line: int | None = None) -> None:
         self.diagnostics.append(Diagnostic("warning", message, path, line))
@@ -53,14 +51,7 @@ class BuildContext:
         self.diagnostics.append(Diagnostic("error", message, path, line))
 
     def resolve_relative(self, raw: str, *, current_file: Path | None = None) -> Path:
-        raw_path = Path(raw).expanduser()
-        if raw_path.is_absolute():
-            return raw_path
-        base = (current_file or self.source_path).parent
-        candidate = (base / raw_path).resolve()
-        if candidate.exists():
-            return candidate
-        return (self.project_root / raw_path).resolve()
+        return resolve_markdown_reference(raw, current_file=current_file or self.source_path, project_root=self.project_root)
 
     def asset_url(self, raw: str, *, current_file: Path | None = None) -> str:
         """Return the URL to use in HTML and queue a local asset copy if possible."""

@@ -9,16 +9,20 @@ from typing import Any
 from .code import expand_code_directives
 from .config import BuildOptions, deep_merge, load_config_file, options_from_mapping
 from .context import BuildContext, Diagnostic
+from .directives import expand_includes
 from .errors import BuildError
 from .frontmatter import split_frontmatter
 from .graph import build_dependency_graph
-from .images import process_obsidian_images
-from .includes import expand_includes
-from .markdown_engine import render_markdown
-from .math import protect_math, restore_math
-from .templates import render_template
-from .toc import TocHeading, prepare_toc
-from .slug import plain_text
+from .rendering import (
+    TocHeading,
+    plain_text,
+    prepare_toc,
+    process_obsidian_images,
+    protect_math,
+    render_markdown,
+    render_template,
+    restore_math,
+)
 
 
 @dataclass

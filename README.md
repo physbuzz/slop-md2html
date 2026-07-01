@@ -31,15 +31,6 @@ For development, install the package in editable mode with the `dev` extra:
 python -m pip install -e ".[dev]"
 ```
 
-or, if you prefer a requirements file workflow:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-The important detail is the `-r`: `python -m pip install requirements.txt` tries to
-install a package literally named `requirements.txt`.
-
 To build a single-file executable and copy it to `~/.local/bin/md2html`:
 
 ```bash
@@ -60,6 +51,21 @@ examples/  demo Markdown, demo code, and rendered sample output
 
 Rendered demos live in `examples/rendered/` so generated HTML does not sit beside
 the package source.
+
+Inside `md2html/`, the main boundaries are:
+
+```text
+builder.py      document build orchestration and public result objects
+cli.py          argument parsing, source discovery, and job planning
+config.py       typed build options and config-file loading
+context.py      per-build dependencies, diagnostics, assets, and path lookup
+directives.py   shared @include/@src parsing plus include expansion
+code.py         source embedding and optional source execution
+graph.py        article-level dependency graph for dry-run/watch
+rendering.py    Mistune rendering, TOC, slugs, math, images, highlighting, templates
+paths.py        shared lenient path resolution and source-output paths
+watch.py        watchdog rebuild loop and development server
+```
 
 ## CLI examples
 
