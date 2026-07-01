@@ -1,5 +1,5 @@
 {
-  "input": "examples",
+  "input": ".",
   "output": "_site",
   "recursive": true,
   "embed_assets": true,

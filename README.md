@@ -52,6 +52,19 @@ examples/  demo Markdown, demo code, and rendered sample output
 Rendered demos live in `examples/rendered/` so generated HTML does not sit beside
 the package source.
 
+The example build configuration lives at `examples/md2html.json`. To render the
+examples into `examples/_site/`:
+
+```bash
+make examples
+```
+
+To remove that generated example site:
+
+```bash
+make examples-clean
+```
+
 Inside `md2html/`, the main boundaries are:
 
 ```text

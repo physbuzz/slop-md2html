@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import http.server
+import contextlib
 import socketserver
 import threading
 import time
@@ -175,6 +176,25 @@ def _make_observer():
     return Observer()
 
 
+def local_server_url(port: int, *, host: str = "127.0.0.1") -> str:
+    return f"http://{host}:{port}/"
+
+
+def _watch_root_message(roots: Iterable[Path], exclusions: WatchExclusions) -> str:
+    watched = ", ".join(str(root) for root in roots if not exclusions.ignores(root))
+    return f"watching with watchdog: {watched}"
+
+
+def _stop_observer(observer) -> None:  # type: ignore[no-untyped-def]
+    with contextlib.suppress(RuntimeError):
+        observer.stop()
+    try:
+        observer.join()
+    except RuntimeError as exc:
+        if "release unlocked lock" not in str(exc):
+            raise
+
+
 def watch_jobs(
     builder: MarkdownSiteBuilder,
     jobs: list[Job],
@@ -228,12 +248,10 @@ def watch_jobs(
         raise RuntimeError("no watchable roots found")
 
     observer.start()
-    if verbose:
-        watched = ", ".join(str(root) for root in roots if not exclusions.ignores(root))
-        ignored = ", ".join(str(root) for root in exclusions.ignored_roots)
-        print(f"watching with watchdog: {watched}")
-        if ignored:
-            print(f"ignoring generated output under: {ignored}")
+    print(_watch_root_message(roots, exclusions), flush=True)
+    ignored = ", ".join(str(root) for root in exclusions.ignored_roots)
+    if ignored and verbose:
+        print(f"ignoring generated output under: {ignored}", flush=True)
 
     try:
         while True:
@@ -256,8 +274,7 @@ def watch_jobs(
     except KeyboardInterrupt:
         return
     finally:
-        observer.stop()
-        observer.join()
+        _stop_observer(observer)
 
 
 def serve_and_watch(
@@ -277,7 +294,8 @@ def serve_and_watch(
     with socketserver.TCPServer(("", port), handler) as httpd:
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
-        print(f"serving {serve_dir} at http://localhost:{port}/")
+        print(f"{local_server_url(port)}", flush=True)
+        print(f"serving {serve_dir}", flush=True)
         try:
             watch_jobs(
                 builder,

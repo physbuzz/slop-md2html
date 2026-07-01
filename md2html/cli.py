@@ -9,7 +9,7 @@ from .builder import MarkdownSiteBuilder, load_options
 from .config import load_config_file
 from .errors import Md2HtmlError
 from .paths import dedupe_paths, is_ignored
-from .watch import serve_and_watch, watch_jobs
+from .watch import local_server_url, serve_and_watch, watch_jobs
 
 _HTML_SUFFIXES = {".html", ".htm"}
 
@@ -210,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.watch:
+            print(f"watching only; no HTTP server started. Use --serve for {local_server_url(args.port)}", flush=True)
             watch_jobs(
                 builder,
                 jobs,

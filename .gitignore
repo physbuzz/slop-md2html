@@ -12,5 +12,7 @@ dist/
 *.spec
 *.egg-info/
 _site/
+html/
+examples/_site/
 
 AGENTS.md

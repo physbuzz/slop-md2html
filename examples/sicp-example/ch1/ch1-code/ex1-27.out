@@ -1,0 +1,13 @@
+Testing some non-carmichael non-primes
+Fermat test of 231 : #f
+Fermat test of 1419 : #f
+Fermat test of 2001 : #f
+Fermat test of 8631 : #f
+
+Testing some carmichael non-primes
+Fermat test of 561 : #t
+Fermat test of 1105 : #t
+Fermat test of 1729 : #t
+Fermat test of 2465 : #t
+Fermat test of 2821 : #t
+Fermat test of 6601 : #t

@@ -9,7 +9,7 @@ from md2html.directives import iter_include_paths, iter_src_directives, parse_sr
 from md2html.frontmatter import dump_frontmatter, split_frontmatter
 from md2html.paths import source_output_path
 from md2html.rendering import Slugger, collect_headings, generate_toc, protect_math, restore_math
-from md2html.watch import WatchExclusions
+from md2html.watch import WatchExclusions, _stop_observer, local_server_url
 
 
 def test_slug_policy_matches_examples():
@@ -248,6 +248,21 @@ def test_watch_exclusions_ignore_generated_code_outputs_when_execute_is_enabled(
     exclusions = WatchExclusions.from_paths(suffixes=[".out"])
     assert exclusions.ignores(tmp_path / "code" / "hello.out")
     assert not exclusions.ignores(tmp_path / "code" / "hello.py")
+
+
+def test_local_server_url_is_clickable_loopback_url():
+    assert local_server_url(8000) == "http://127.0.0.1:8000/"
+
+
+def test_stop_observer_suppresses_watchdog_shutdown_race():
+    class Observer:
+        def stop(self):
+            return None
+
+        def join(self):
+            raise RuntimeError("release unlocked lock")
+
+    _stop_observer(Observer())
 
 
 def test_dependency_graph_records_src_edge_but_not_cpp_header(tmp_path: Path):

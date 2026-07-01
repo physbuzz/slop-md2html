@@ -1,8 +1,9 @@
 PYTHON ?= python
 APP_NAME ?= md2html
 LOCAL_BIN ?= $(HOME)/.local/bin
+EXAMPLES_DIR ?= examples
 
-.PHONY: install pyinstaller test clean
+.PHONY: install pyinstaller test examples examples-clean examples_clean clean
 
 install: pyinstaller
 	mkdir -p "$(LOCAL_BIN)"
@@ -19,6 +20,7 @@ pyinstaller:
 		--collect-all mistune \
 		--collect-all jinja2 \
 		--collect-all watchdog \
+		--collect-all frontmatter \
 		--add-data "md2html/assets:md2html/assets" \
 		--add-data "md2html/default_templates:md2html/default_templates" \
 		md2html/__main__.py
@@ -26,6 +28,12 @@ pyinstaller:
 test:
 	$(PYTHON) -m pytest -q
 
-clean:
-	rm -rf build dist *.spec .pytest_cache
+# examples:
+# 	cd "$(EXAMPLES_DIR)" && $(PYTHON) -m md2html --config md2html.json
+# 
+# examples-clean examples_clean:
+# 	rm -rf "$(EXAMPLES_DIR)/_site"
+
+clean: examples-clean
+	rm -rf build dist *.spec *.egg-info .pytest_cache
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
