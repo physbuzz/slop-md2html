@@ -12,7 +12,16 @@ from md2html.directives import iter_include_paths, iter_src_directives, parse_sr
 from md2html.frontmatter import dump_frontmatter, split_frontmatter
 from md2html.paths import source_output_path
 from md2html.rendering import Slugger, collect_headings, generate_toc, protect_math, restore_math
-from md2html.watch import WatchExclusions, _make_http_server, _stop_observer, _watch_root_message, local_server_url
+from md2html.watch import (
+    WatchExclusions,
+    _initial_build_message,
+    _jobs_needing_build,
+    _make_http_server,
+    _rebuild_message,
+    _stop_observer,
+    _watch_root_message,
+    local_server_url,
+)
 
 
 def test_slug_policy_matches_examples():
@@ -278,6 +287,67 @@ def test_watch_exclusions_ignore_generated_code_outputs_when_execute_is_enabled(
     assert not exclusions.ignores(tmp_path / "code" / "hello.py")
 
 
+def test_initial_watch_build_skips_up_to_date_page(tmp_path: Path):
+    page = tmp_path / "page.md"
+    out = tmp_path / "html" / "page.html"
+    page.write_text("# Page\n", encoding="utf-8")
+    out.parent.mkdir()
+    out.write_text("<h1>Page</h1>\n", encoding="utf-8")
+    import os
+
+    os.utime(page, (1000, 1000))
+    os.utime(out, (2000, 2000))
+
+    stale, skipped = _jobs_needing_build(MarkdownSiteBuilder(BuildOptions(project_root=tmp_path)), [(page, out)])
+
+    assert stale == []
+    assert skipped == 1
+
+
+def test_initial_watch_build_rebuilds_when_dependency_is_newer(tmp_path: Path):
+    page = tmp_path / "page.md"
+    partial = tmp_path / "partial.md"
+    out = tmp_path / "html" / "page.html"
+    page.write_text("@include(partial.md)\n", encoding="utf-8")
+    partial.write_text("new partial\n", encoding="utf-8")
+    out.parent.mkdir()
+    out.write_text("old html\n", encoding="utf-8")
+    import os
+
+    os.utime(page, (1000, 1000))
+    os.utime(out, (2000, 2000))
+    os.utime(partial, (3000, 3000))
+
+    stale, skipped = _jobs_needing_build(MarkdownSiteBuilder(BuildOptions(project_root=tmp_path)), [(page, out)])
+
+    assert stale == [(page, out)]
+    assert skipped == 0
+
+
+def test_initial_watch_build_rebuilds_when_generated_out_is_stale(tmp_path: Path):
+    (tmp_path / "code").mkdir()
+    src = tmp_path / "code" / "hello.py"
+    out_file = tmp_path / "code" / "hello.out"
+    page = tmp_path / "page.md"
+    html_out = tmp_path / "html" / "page.html"
+    src.write_text("print('new')\n", encoding="utf-8")
+    out_file.write_text("old\n", encoding="utf-8")
+    page.write_text("@src(code/hello.py)\n", encoding="utf-8")
+    html_out.parent.mkdir()
+    html_out.write_text("old html built after source\n", encoding="utf-8")
+    import os
+
+    os.utime(page, (1000, 1000))
+    os.utime(out_file, (1500, 1500))
+    os.utime(src, (2000, 2000))
+    os.utime(html_out, (3000, 3000))
+
+    stale, skipped = _jobs_needing_build(MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, execute=True)), [(page, html_out)])
+
+    assert stale == [(page, html_out)]
+    assert skipped == 0
+
+
 def test_local_server_url_is_clickable_loopback_url():
     assert local_server_url(8000) == "http://127.0.0.1:8000/"
 
@@ -290,8 +360,18 @@ def test_watch_help_describes_serving_behavior():
 
 def test_watch_status_message_hides_implementation_detail(tmp_path: Path):
     message = _watch_root_message([tmp_path], WatchExclusions())
-    assert message == f"watching: {tmp_path}"
+    assert message == f"Watching for changes in {tmp_path}"
     assert "watchdog" not in message
+
+
+def test_watch_build_messages_are_human_readable():
+    assert _initial_build_message(0, 6) == "Site is already up to date (6 pages)."
+    assert _initial_build_message(2, 4) == "Built 2 pages; 4 unchanged."
+    assert _initial_build_message(1, 0) == "Built 1 page."
+    assert _initial_build_message(6, 0) == "Built 6 pages."
+    assert _rebuild_message(1) == "Regenerated 1 page."
+    assert _rebuild_message(2) == "Regenerated 2 pages."
+    assert _rebuild_message(0) == "Change detected, no pages needed rebuilding."
 
 
 def test_http_server_reports_busy_requested_port(monkeypatch):

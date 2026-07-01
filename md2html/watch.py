@@ -141,6 +141,78 @@ def _build_all(builder: MarkdownSiteBuilder, jobs: list[Job], *, verbose: bool =
             print(diagnostic.format())
 
 
+def _dependency_is_newer_than_output(dependency: Path, output: Path) -> bool:
+    if not dependency.exists():
+        return True
+    try:
+        return dependency.stat().st_mtime > output.stat().st_mtime
+    except OSError:
+        return True
+
+
+def _generated_output_is_stale(source: Path, dependencies: set[Path], builder: MarkdownSiteBuilder) -> bool:
+    if not builder.options.execute:
+        return False
+    generated = source.with_suffix(builder.options.code.output_suffix) if builder.options.code.output_suffix.startswith(".") else source.with_name(source.name + builder.options.code.output_suffix)
+    if generated not in dependencies:
+        return False
+    if not generated.exists():
+        return True
+    try:
+        return source.exists() and source.stat().st_mtime > generated.stat().st_mtime
+    except OSError:
+        return True
+
+
+def _job_needs_build(builder: MarkdownSiteBuilder, job: Job, dependencies: set[Path]) -> bool:
+    source, output = (resolve_lenient(job[0]), resolve_lenient(job[1]))
+    if builder.options.force_rebuild or not output.exists():
+        return True
+    for dependency in dependencies:
+        if _dependency_is_newer_than_output(dependency, output):
+            return True
+        if _generated_output_is_stale(dependency, dependencies, builder):
+            return True
+    return False
+
+
+def _jobs_needing_build(builder: MarkdownSiteBuilder, jobs: list[Job]) -> tuple[list[Job], int]:
+    graph = build_dependency_graph(jobs, builder.options)
+    stale: list[Job] = []
+    for source, output in jobs:
+        dependencies = graph.dependencies_by_page.get(resolve_lenient(source), {resolve_lenient(source)})
+        if _job_needs_build(builder, (source, output), dependencies):
+            stale.append((source, output))
+    return stale, len(jobs) - len(stale)
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    return singular if count == 1 else plural or f"{singular}s"
+
+
+def _initial_build_message(built: int, skipped: int) -> str:
+    total = built + skipped
+    if total == 0:
+        return "No pages found."
+    if built == 0:
+        return f"Site is already up to date ({total} {_plural(total, 'page')})."
+    if skipped == 0:
+        return f"Built {built} {_plural(built, 'page')}."
+    return f"Built {built} {_plural(built, 'page')}; {skipped} unchanged."
+
+
+def _rebuild_message(count: int) -> str:
+    if count == 0:
+        return "Change detected, no pages needed rebuilding."
+    return f"Regenerated {count} {_plural(count, 'page')}."
+
+
+def _initial_build(builder: MarkdownSiteBuilder, jobs: list[Job], *, verbose: bool = False) -> None:
+    stale_jobs, up_to_date = _jobs_needing_build(builder, jobs)
+    _build_all(builder, stale_jobs, verbose=verbose)
+    print(_initial_build_message(len(stale_jobs), up_to_date), flush=True)
+
+
 def _dependencies_from_dry_run(builder: MarkdownSiteBuilder, jobs: list[Job]) -> set[Path]:
     dependencies: set[Path] = set()
     for src, out in jobs:
@@ -187,7 +259,7 @@ def local_server_url(port: int, *, host: str = "127.0.0.1") -> str:
 
 def _watch_root_message(roots: Iterable[Path], exclusions: WatchExclusions) -> str:
     watched = ", ".join(str(root) for root in roots if not exclusions.ignores(root))
-    return f"watching: {watched}"
+    return f"Watching for changes in {watched}"
 
 
 def _stop_observer(observer) -> None:  # type: ignore[no-untyped-def]
@@ -219,6 +291,7 @@ def watch_jobs(
     ignored_files: Iterable[Path] = (),
     verbose: bool = False,
     debounce: float = 0.25,
+    initial_build: bool = True,
 ) -> None:
     """Watch source trees with watchdog and rebuild affected pages.
 
@@ -227,7 +300,8 @@ def watch_jobs(
     """
 
     current_jobs = job_provider() if job_provider else jobs
-    _build_all(builder, current_jobs, verbose=verbose)
+    if initial_build:
+        _initial_build(builder, current_jobs, verbose=verbose)
 
     roots = _prune_nested_roots([*(watch_roots or []), *_watch_roots_from_jobs(builder, current_jobs)])
     base_ignored_roots = list(ignored_roots)
@@ -280,10 +354,10 @@ def watch_jobs(
             except Md2HtmlError as exc:
                 print(f"ERROR: {exc}")
                 continue
+            print(_rebuild_message(len(jobs_to_build)), flush=True)
             if verbose:
                 changed = ", ".join(str(path) for path in changed_paths)
                 print(f"changed: {changed}")
-                print(f"rebuilding {len(jobs_to_build)} affected page(s)" if jobs_to_build else "no md2html page dependencies matched this change")
             _build_all(builder, jobs_to_build, verbose=verbose)
     except KeyboardInterrupt:
         return
@@ -302,15 +376,18 @@ def serve_and_watch(
     port: int = 8000,
     verbose: bool = False,
 ) -> None:
-    output_dirs = {out.parent.resolve() for _src, out in jobs}
+    current_jobs = job_provider() if job_provider else jobs
+    _initial_build(builder, current_jobs, verbose=verbose)
+
+    output_dirs = {out.parent.resolve() for _src, out in current_jobs}
     serve_dir = sorted(output_dirs, key=lambda p: len(str(p)))[0] if output_dirs else Path.cwd()
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(serve_dir))
     httpd = _make_http_server(handler, port)
     with httpd:
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
-        print(f"{local_server_url(port)}", flush=True)
-        print(f"serving {serve_dir}", flush=True)
+        print(f"Server running at {local_server_url(port)}", flush=True)
+        print("Press Ctrl+C to stop.", flush=True)
         try:
             watch_jobs(
                 builder,
@@ -320,6 +397,7 @@ def serve_and_watch(
                 ignored_roots=ignored_roots,
                 ignored_files=ignored_files,
                 verbose=verbose,
+                initial_build=False,
             )
         finally:
             httpd.shutdown()
