@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from .code import expand_code_directives
+from .config import BuildOptions, deep_merge, load_config_file, options_from_mapping
+from .context import BuildContext, Diagnostic
+from .errors import BuildError
+from .frontmatter import split_frontmatter
+from .graph import build_dependency_graph
+from .images import process_obsidian_images
+from .includes import expand_includes
+from .markdown_engine import render_markdown
+from .math import protect_math, restore_math
+from .templates import render_template
+from .toc import TocHeading, prepare_toc
+from .slug import plain_text
+
+
+@dataclass
+class BuildResult:
+    source: Path
+    output: Path
+    written: bool
+    skipped: bool = False
+    dependencies: set[Path] = field(default_factory=set)
+    assets: list[tuple[Path, Path]] = field(default_factory=list)
+    diagnostics: list[Diagnostic] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    headings: list[TocHeading] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source": str(self.source),
+            "output": str(self.output),
+            "written": self.written,
+            "skipped": self.skipped,
+            "dependencies": sorted(str(p) for p in self.dependencies),
+            "assets": [[str(src), str(rel)] for src, rel in self.assets],
+            "diagnostics": [d.format() for d in self.diagnostics],
+            "metadata": self.metadata,
+            "headings": [{"level": h.level, "title": h.text, "id": h.id, "line": h.line} for h in self.headings],
+        }
+
+
+_HEADING1_PREFIX = "# "
+
+
+def _first_heading_title(markdown_text: str) -> str | None:
+    in_fence = False
+    fence = ""
+    for line in markdown_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence = True
+                fence = marker
+            elif marker == fence:
+                in_fence = False
+            continue
+        if in_fence:
+            continue
+        if line.startswith(_HEADING1_PREFIX):
+            return plain_text(line[2:].strip().strip("# "))
+    return None
+
+
+def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, dict[str, Any], list[TocHeading]]:
+    metadata, body = split_frontmatter(source_text)
+    ctx.metadata.update(metadata)
+
+    body = expand_includes(body, ctx, current_file=ctx.source_path, stack=(ctx.source_path.resolve(),))
+    body = process_obsidian_images(body, ctx, current_file=ctx.source_path)
+    body, headings, _toc_html = prepare_toc(body)
+    body, math_spans = protect_math(body)
+    body = expand_code_directives(body, ctx)
+    content_html = render_markdown(body, ctx)
+    content_html = restore_math(content_html, math_spans, ctx.options.math, output_mode=ctx.options.output_mode)
+
+    title = str(metadata.get("title") or _first_heading_title(body) or ctx.source_path.name)
+    document = render_template(
+        content=content_html,
+        title=title,
+        metadata=metadata,
+        options=ctx.options,
+        template_name=metadata.get("template"),
+    )
+    return document, metadata, headings
+
+
+class MarkdownSiteBuilder:
+    def __init__(self, options: BuildOptions | None = None) -> None:
+        self.options = options or BuildOptions()
+
+    @classmethod
+    def from_config_file(cls, path: Path) -> "MarkdownSiteBuilder":
+        data = load_config_file(path)
+        options = options_from_mapping(data, cwd=path.parent)
+        options.config_file = path
+        return cls(options)
+
+    def build_file(self, source: Path, output: Path, *, dry_run: bool = False) -> BuildResult:
+        source = source.resolve()
+        output = output.resolve()
+        if not source.exists():
+            raise BuildError(f"source does not exist: {source}")
+        if output.exists() and self.options.no_overwrite and not self.options.force_rebuild:
+            return BuildResult(source=source, output=output, written=False, skipped=True)
+        if output.exists() and not self.options.force_rebuild:
+            try:
+                if output.stat().st_mtime >= source.stat().st_mtime:
+                    # Includes and code outputs can make this conservative, so only skip when explicitly not forcing.
+                    pass
+            except OSError:
+                pass
+
+        ctx = BuildContext(source_path=source, output_path=output, options=self.options, dry_run=dry_run)
+        ctx.add_dependency(source)
+        source_text = source.read_text(encoding="utf-8")
+        document, metadata, headings = render_markdown_document(source_text, ctx)
+        result = BuildResult(
+            source=source,
+            output=output,
+            written=False,
+            dependencies=set(ctx.dependencies),
+            assets=list(ctx.assets),
+            diagnostics=list(ctx.diagnostics),
+            metadata=dict(metadata),
+            headings=headings,
+        )
+        if dry_run:
+            return result
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(document, encoding="utf-8")
+        ctx.copy_queued_assets()
+        result.written = True
+        return result
+
+    def dry_run_json(self, jobs: list[tuple[Path, Path]]) -> str:
+        graph = build_dependency_graph(jobs, self.options)
+        results = [self.build_file(src, out, dry_run=True).as_dict() for src, out in jobs]
+        return json.dumps({"jobs": results, "graph": graph.as_dict()}, indent=2)
+
+
+def load_options(cwd: Path, config_path: Path | None = None, overrides: dict[str, Any] | None = None) -> BuildOptions:
+    data: dict[str, Any] = {}
+    path = config_path or (cwd / "md2html.json")
+    if path.exists():
+        data = load_config_file(path)
+    if overrides:
+        data = deep_merge(data, overrides)
+    options = options_from_mapping(data, cwd=cwd)
+    options.config_file = path if path.exists() else None
+    return options

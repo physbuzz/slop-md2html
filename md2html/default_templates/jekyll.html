@@ -1,0 +1,11 @@
+---
+layout: {{ layout|default('post') }}
+title: {{ title|tojson }}
+{% for key, value in frontmatter.items() if key not in ['layout', 'title'] -%}
+{{ key }}: {{ value|tojson }}
+{% endfor -%}
+md2html:
+  math: {{ use_mathjax|lower }}
+  pygments: true
+---
+{{ content | safe }}

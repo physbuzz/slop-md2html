@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+
+.pytest_cache/
+.venv/
+.codex
+.agents
+*.swp
+
+build/
+dist/
+*.spec
+*.egg-info/
+_site/
+
+AGENTS.md

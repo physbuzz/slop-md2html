@@ -1,0 +1,13 @@
+{
+  "input": "examples",
+  "output": "_site",
+  "recursive": true,
+  "embed_assets": true,
+  "execute": false,
+  "math": {
+    "backend": "mathjax"
+  },
+  "images": {
+    "class": "note-image"
+  }
+}

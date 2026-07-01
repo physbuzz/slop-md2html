@@ -1,0 +1,315 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from md2html.builder import MarkdownSiteBuilder
+from md2html.cli import build_jobs, discover_sources, output_exclusions
+from md2html.code import parse_src_directive
+from md2html.config import BuildOptions
+from md2html.math import protect_math, restore_math
+from md2html.slug import Slugger
+from md2html.toc import collect_headings, generate_toc
+from md2html.watch import WatchExclusions
+
+
+def test_slug_policy_matches_examples():
+    s = Slugger()
+    assert s.slug("Section 2.5") == "section-25"
+    assert s.slug("Exercise 2.77") == "exercise-277"
+
+
+def test_math_is_protected_from_markdown_emphasis():
+    text, spans = protect_math("Inline $x_1,x_2$ and **bold**")
+    assert "@@MD2HTML_MATH_0@@" in text
+    restored = restore_math("<p>" + text + "</p>", spans, BuildOptions().math)
+    assert "$x_1,x_2$" in restored
+    assert "data-tex=\"x_1,x_2\"" in restored
+
+
+def test_toc_compacts_exercises():
+    md = """# Title
+
+@toc
+
+## Section 1
+
+## Exercises
+
+### Exercise 2.77
+
+### Solution
+
+### Exercise 2.78
+"""
+    headings = collect_headings(md)
+    toc = generate_toc(headings)
+    assert "Directory" in toc
+    assert "toc-exercises" in toc
+    assert "#exercise-277" in toc
+    assert "#exercise-278" in toc
+    assert "Solution" not in toc
+
+
+def test_src_flag_policy():
+    plain = parse_src_directive("code/example.py")
+    assert not plain.collapsed
+    assert not plain.collapsible
+    assert not plain.expanded_by_default
+
+    collapsible = parse_src_directive("code/example.py, collapsible")
+    assert not collapsible.collapsed
+    assert collapsible.collapsible
+    assert collapsible.expanded_by_default
+
+    collapsed = parse_src_directive("code/example.py, collapsed")
+    assert collapsed.collapsed
+    assert collapsed.collapsible
+    assert not collapsed.expanded_by_default
+
+
+def test_builder_renders_includes_images_toc_and_code(tmp_path: Path):
+    (tmp_path / "partials").mkdir()
+    (tmp_path / "partials" / "intro.md").write_text("Included $x_1,x_2$\n", encoding="utf-8")
+    (tmp_path / "code").mkdir()
+    (tmp_path / "code" / "hello.py").write_text("print('hello')\n", encoding="utf-8")
+    (tmp_path / "code" / "hello.out").write_text("hello\n", encoding="utf-8")
+    (tmp_path / "img").mkdir()
+    (tmp_path / "img" / "pic.svg").write_text("<svg></svg>", encoding="utf-8")
+    source = tmp_path / "note.md"
+    source.write_text(
+        """---
+title: Test Note
+---
+@include(partials/intro.md)
+
+@toc
+
+## Section 2.5
+
+![[img/pic.svg|width=70%|alt=Picture]]
+
+### Exercises
+
+#### Exercise 2.77
+
+@src(code/hello.py, collapsed)
+""",
+        encoding="utf-8",
+    )
+    out = tmp_path / "note.html"
+    options = BuildOptions(project_root=tmp_path)
+    result = MarkdownSiteBuilder(options).build_file(source, out)
+    html = out.read_text(encoding="utf-8")
+    assert result.written
+    assert "Test Note" in html
+    assert "section-25" in html
+    assert "exercise-277" in html
+    assert "data-tex=\"x_1,x_2\"" in html
+    assert "collapsible-code" in html
+    assert '<details class="collapsible-code">' in html
+    assert '<details class="collapsible-code" open>' not in html
+    assert "hello" in html
+    assert "width: 70%" in html
+
+
+def test_src_collapsible_is_expanded_and_plain_src_is_not_collapsible(tmp_path: Path):
+    (tmp_path / "code").mkdir()
+    (tmp_path / "code" / "plain.py").write_text("print('plain')\n", encoding="utf-8")
+    (tmp_path / "code" / "collapsible.py").write_text("print('collapsible')\n", encoding="utf-8")
+    source = tmp_path / "note.md"
+    source.write_text(
+        """@src(code/plain.py)
+
+@src(code/collapsible.py, collapsible)
+""",
+        encoding="utf-8",
+    )
+    out = tmp_path / "note.html"
+    MarkdownSiteBuilder(BuildOptions(project_root=tmp_path)).build_file(source, out)
+    html = out.read_text(encoding="utf-8")
+
+    assert '<div class="code-header"><a href="code/plain.py">code/plain.py</a></div>' in html
+    assert html.count('<details class="collapsible-code" open>') == 1
+    assert '<summary class="code-summary"><a href="code/collapsible.py">code/collapsible.py</a>' in html
+
+
+def test_full_site_build_preserves_relative_paths_and_excludes_output_dir(tmp_path: Path):
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.md").write_text("# Home\n", encoding="utf-8")
+    (site / "chapter").mkdir()
+    (site / "chapter" / "page.md").write_text("# Page\n", encoding="utf-8")
+    (site / "html").mkdir()
+    (site / "html" / "stale.md").write_text("# Should not be rebuilt\n", encoding="utf-8")
+
+    sources = discover_sources([site], recursive=True, exclude_dirs=[site / "html"])
+    assert site / "html" / "stale.md" not in sources
+
+    output = site / "html"
+    jobs = build_jobs(sources, [site], output, recursive=True)
+    ignored_roots, ignored_files = output_exclusions(output, sources, jobs)
+    assert output.resolve() in ignored_roots
+    assert all(out.resolve() in ignored_files for _src, out in jobs)
+
+    builder = MarkdownSiteBuilder(BuildOptions(project_root=site))
+    for src, out in jobs:
+        builder.build_file(src, out)
+
+    assert (output / "index.html").exists()
+    assert (output / "chapter" / "page.html").exists()
+    assert not (output / "html" / "stale.html").exists()
+
+
+def test_watch_exclusions_ignore_output_dir_and_files(tmp_path: Path):
+    source_root = tmp_path / "site"
+    output_root = source_root / "html"
+    source_root.mkdir()
+    output_root.mkdir()
+    exclusions = WatchExclusions.from_paths(roots=[output_root], files=[source_root / "single.html"])
+
+    assert exclusions.ignores(output_root / "index.html")
+    assert exclusions.ignores(output_root / "sub" / "page.html")
+    assert exclusions.ignores(source_root / "single.html")
+    assert not exclusions.ignores(source_root / "index.md")
+
+
+def test_dry_run_with_execute_does_not_create_out_file(tmp_path: Path):
+    (tmp_path / "code").mkdir()
+    src = tmp_path / "code" / "hello.py"
+    src.write_text("print('hello')\n", encoding="utf-8")
+    note = tmp_path / "note.md"
+    note.write_text("@src(code/hello.py)\n", encoding="utf-8")
+    out = tmp_path / "note.html"
+
+    options = BuildOptions(project_root=tmp_path, execute=True)
+    result = MarkdownSiteBuilder(options).build_file(note, out, dry_run=True)
+
+    assert not out.exists()
+    assert not (tmp_path / "code" / "hello.out").exists()
+    assert (tmp_path / "code" / "hello.out").resolve() in result.dependencies
+
+
+def test_watch_exclusions_ignore_generated_code_outputs_when_execute_is_enabled(tmp_path: Path):
+    exclusions = WatchExclusions.from_paths(suffixes=[".out"])
+    assert exclusions.ignores(tmp_path / "code" / "hello.out")
+    assert not exclusions.ignores(tmp_path / "code" / "hello.py")
+
+
+def test_dependency_graph_records_src_edge_but_not_cpp_header(tmp_path: Path):
+    from md2html.graph import build_dependency_graph
+
+    page = tmp_path / "page.md"
+    main_cpp = tmp_path / "main.cpp"
+    header = tmp_path / "file.h"
+    out = tmp_path / "page.html"
+    page.write_text("@src(main.cpp)\n", encoding="utf-8")
+    main_cpp.write_text('#include "file.h"\nint main(){return 0;}\n', encoding="utf-8")
+    header.write_text("// deliberately not part of the md2html graph\n", encoding="utf-8")
+
+    graph = build_dependency_graph([(page, out)], BuildOptions(project_root=tmp_path))
+
+    assert any(edge.kind == "@src" and edge.upstream == main_cpp.resolve() and edge.downstream == page.resolve() for edge in graph.edges)
+    assert not any(edge.upstream == header.resolve() for edge in graph.edges)
+    assert graph.affected_jobs([main_cpp]) == [(page.resolve(), out.resolve())]
+    assert graph.affected_jobs([header]) == []
+
+
+def test_dependency_graph_tracks_src_output_when_out_exists(tmp_path: Path):
+    from md2html.graph import build_dependency_graph
+
+    page = tmp_path / "page.md"
+    main_cpp = tmp_path / "main.cpp"
+    main_out = tmp_path / "main.out"
+    out = tmp_path / "page.html"
+    page.write_text("@src(main.cpp)\n", encoding="utf-8")
+    main_cpp.write_text("int main(){return 0;}\n", encoding="utf-8")
+    main_out.write_text("cached output\n", encoding="utf-8")
+
+    graph = build_dependency_graph([(page, out)], BuildOptions(project_root=tmp_path))
+
+    assert any(edge.kind == "@src-output" and edge.upstream == main_out.resolve() and edge.downstream == page.resolve() for edge in graph.edges)
+    assert graph.affected_jobs([main_out]) == [(page.resolve(), out.resolve())]
+
+
+def test_dependency_graph_tracks_nested_include_and_src(tmp_path: Path):
+    from md2html.graph import build_dependency_graph
+
+    (tmp_path / "partials").mkdir()
+    (tmp_path / "code").mkdir()
+    page = tmp_path / "page.md"
+    mid = tmp_path / "partials" / "mid.md"
+    leaf = tmp_path / "partials" / "leaf.md"
+    src = tmp_path / "code" / "snippet.py"
+    out = tmp_path / "page.html"
+    page.write_text("# Page\n\n@include(partials/mid.md)\n", encoding="utf-8")
+    mid.write_text("@include(leaf.md)\n\n@src(../code/snippet.py)\n", encoding="utf-8")
+    leaf.write_text("leaf\n", encoding="utf-8")
+    src.write_text("print('hello')\n", encoding="utf-8")
+
+    graph = build_dependency_graph([(page, out)], BuildOptions(project_root=tmp_path))
+
+    assert graph.affected_jobs([leaf]) == [(page.resolve(), out.resolve())]
+    assert graph.affected_jobs([src]) == [(page.resolve(), out.resolve())]
+
+
+def test_dependency_graph_detects_include_cycles(tmp_path: Path):
+    from md2html.errors import IncludeCycleError
+    from md2html.graph import build_dependency_graph
+
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("@include(b.md)\n", encoding="utf-8")
+    b.write_text("@include(a.md)\n", encoding="utf-8")
+
+    try:
+        build_dependency_graph([(a, tmp_path / "a.html")], BuildOptions(project_root=tmp_path))
+    except IncludeCycleError as exc:
+        assert "include cycle detected" in str(exc)
+    else:
+        raise AssertionError("expected an include cycle error")
+
+
+def test_execute_uses_fresh_out_file_without_rerunning(tmp_path: Path):
+    import os
+
+    (tmp_path / "code").mkdir()
+    src = tmp_path / "code" / "hello.py"
+    out_file = tmp_path / "code" / "hello.out"
+    page = tmp_path / "page.md"
+    html_out = tmp_path / "page.html"
+    src.write_text("print('new output')\n", encoding="utf-8")
+    out_file.write_text("cached output\n", encoding="utf-8")
+    os.utime(src, (1000, 1000))
+    os.utime(out_file, (2000, 2000))
+    page.write_text("@src(code/hello.py)\n", encoding="utf-8")
+
+    MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, execute=True)).build_file(page, html_out)
+
+    assert out_file.read_text(encoding="utf-8") == "cached output\n"
+    assert "cached output" in html_out.read_text(encoding="utf-8")
+
+
+def test_resource_lookup_finds_packaged_assets():
+    from md2html.resources import package_resource_path
+
+    assert package_resource_path("assets/base.css").exists()
+
+
+def test_src_inside_include_resolves_relative_to_included_file(tmp_path: Path):
+    (tmp_path / "partials").mkdir()
+    (tmp_path / "code").mkdir()
+    page = tmp_path / "page.md"
+    partial = tmp_path / "partials" / "snippet.md"
+    src = tmp_path / "code" / "snippet.py"
+    out_file = tmp_path / "code" / "snippet.out"
+    page.write_text("@include(partials/snippet.md)\n", encoding="utf-8")
+    partial.write_text("@src(../code/snippet.py)\n", encoding="utf-8")
+    src.write_text("print('hello from include')\n", encoding="utf-8")
+    out_file.write_text("hello from include\n", encoding="utf-8")
+
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path)).build_file(page, tmp_path / "page.html")
+    html = (tmp_path / "page.html").read_text(encoding="utf-8")
+
+    assert not result.diagnostics
+    assert "hello from include" in html
+    assert "code/snippet.py" in html
