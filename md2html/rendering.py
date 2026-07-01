@@ -27,8 +27,11 @@ _EXERCISE_RE = re.compile(r"^exercise\b", re.IGNORECASE)
 _FENCE_RE = re.compile(r"(```.*?```|~~~.*?~~~)", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"(`+)(.*?)(?<!`)\1", re.DOTALL)
 _OBSIDIAN_IMAGE_RE = re.compile(r"!\[\[(?P<body>[^\]]+)\]\]")
+_HTML_IMAGE_RE = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE)
+_HTML_ATTR_RE = re.compile(r"""(?P<key>[-:\w]+)(?:\s*=\s*(?P<quote>["'])(?P<quoted>.*?)(?P=quote)|\s*=\s*(?P<bare>[^\s"'>]+))?""")
 _ASSETS_DIR = package_resource_path("assets")
 _DEFAULT_TEMPLATE_DIR = package_resource_path("default_templates")
+JEKYLL_COMPAT_STYLESHEET = "md2html_pygments_compat.css"
 
 _SUFFIX_LANG = {
     ".py": "python",
@@ -398,6 +401,24 @@ def process_obsidian_images_markdown(text: str, ctx: BuildContext, *, current_fi
     return _OBSIDIAN_IMAGE_RE.sub(repl, text)
 
 
+def _parse_html_attrs(raw_attrs: str) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    for match in _HTML_ATTR_RE.finditer(raw_attrs):
+        key = match.group("key").lower()
+        value = match.group("quoted")
+        if value is None:
+            value = match.group("bare")
+        attrs[key] = value or ""
+    return attrs
+
+
+def queue_html_image_assets(text: str, ctx: BuildContext, *, current_file: Path | None = None) -> None:
+    for match in _HTML_IMAGE_RE.finditer(text):
+        src = _parse_html_attrs(match.group("attrs")).get("src")
+        if src:
+            ctx.asset_url(src, current_file=current_file)
+
+
 def language_for_path(path: str | Path) -> str:
     return _SUFFIX_LANG.get(Path(path).suffix.lower(), "text")
 
@@ -430,6 +451,31 @@ def highlight_code(code: str, lang: str | None = None, *, filename: str | None =
 
 def pygments_css(style: str = "default") -> str:
     return HtmlFormatter(style=style, cssclass="codehilite").get_style_defs(".codehilite")
+
+
+def jekyll_compat_css() -> str:
+    return pygments_css() + "\n\n" + "\n".join(
+        [
+            ".codehilite { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; margin: 1rem 0 1.5rem; overflow-x: auto; }",
+            ".codehilite pre { margin: 0; padding: 1rem; overflow-x: auto; }",
+            ".codehilite code { padding: 0; background: transparent; }",
+            ".code-box { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; overflow: hidden; margin: 1rem 0 1.5rem; }",
+            ".code-box .codehilite { margin: 0; border: none; border-radius: 0; }",
+            ".code-box .codehilite pre { padding: .25rem .4rem .35rem; }",
+            ".code-header, .code-summary, .code-output { font-family: SFMono-Regular, Consolas, \"Liberation Mono\", Menlo, monospace; font-size: .75rem; color: #6a737d; background: #fafbfc; }",
+            ".code-header { padding: .3rem .4rem; border-bottom: 1px solid #e1e4e8; }",
+            ".code-output { padding: .3rem .4rem; border-top: 1px solid #e1e4e8; }",
+            ".code-output pre { margin: .25rem 0 0; white-space: pre-wrap; }",
+            ".code-output span { color: #aa2da5; }",
+            ".collapsible-code { border: none; margin: 0; }",
+            ".code-summary { padding: .5rem .8rem .5rem 2rem; border-bottom: 1px solid #e1e4e8; cursor: pointer; list-style: none; position: relative; }",
+            ".code-summary::before { content: '►'; position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); font-size: .7em; transition: transform .15s ease; }",
+            ".collapsible-code[open] > .code-summary::before { transform: translateY(-50%) rotate(90deg); }",
+            ".expand-hint { font-style: italic; color: #888; margin-left: .5rem; }",
+            ".obsidian-image { display: block; margin: 1rem auto; }",
+            ".md2html-warning { border-left: 4px solid #d29922; background: #fff8c5; padding: .75rem 1rem; margin: 1rem 0; }",
+        ]
+    ) + "\n"
 
 
 class Md2HtmlRenderer(mistune.HTMLRenderer):
@@ -518,12 +564,13 @@ def render_jekyll_markdown(
     title: str,
     metadata: dict[str, Any],
     options: BuildOptions,
+    stylesheet: str = JEKYLL_COMPAT_STYLESHEET,
 ) -> str:
     frontmatter = {key: value for key, value in metadata.items() if key != "template"}
     frontmatter["layout"] = frontmatter.get("layout", "post")
     frontmatter["title"] = title
-    md2html = dict(frontmatter.get("md2html") or {})
-    md2html.setdefault("math", options.math.backend == "mathjax")
-    md2html.setdefault("pygments", True)
-    frontmatter["md2html"] = md2html
+    styles = list(frontmatter.get("md2html_styles") or [])
+    if stylesheet not in styles:
+        styles.append(stylesheet)
+    frontmatter["md2html_styles"] = styles
     return dump_frontmatter(frontmatter) + content

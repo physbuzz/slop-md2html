@@ -17,5 +17,9 @@ html/
 examples/_site/
 jekyll/
 jekyll-html/
+!examples/sicp-example/jekyll/
+examples/sicp-example/jekyll/*
+!examples/sicp-example/jekyll/_layouts/
+!examples/sicp-example/jekyll/_layouts/**
 
 AGENTS.md

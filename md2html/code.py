@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import html
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -159,63 +158,7 @@ def _render_output(output: str | None) -> str:
     )
 
 
-def _fence_block(content: str, lang: str = "") -> str:
-    longest = 0
-    for match in re.finditer(r"`+", content):
-        longest = max(longest, len(match.group(0)))
-    fence = "`" * max(3, longest + 1)
-    return f"{fence}{lang}\n{content.rstrip()}\n{fence}\n"
-
-
-def _render_output_markdown(output: str | None) -> str:
-    if output is None:
-        return ""
-    return (
-        '<div class="code-output" markdown="1">\n'
-        "**Output:**\n\n"
-        f'{_fence_block(output, "text")}'
-        "</div>\n"
-    )
-
-
-def render_source_embed_markdown(src: Path, ctx: BuildContext, directive: SrcDirective) -> str:
-    if not src.exists():
-        message = f"source file not found: {directive.path}"
-        if ctx.options.strict:
-            raise DirectiveError(message)
-        ctx.warn(message, path=ctx.source_path)
-        return f"> md2html warning: {message}\n"
-
-    ctx.add_dependency(src)
-    code = src.read_text(encoding="utf-8")
-    lang = directive.options.get("lang") or language_for_path(src)
-    output = _read_or_execute_output(src, ctx)
-    href = ctx.asset_url(directive.path, current_file=ctx.source_path)
-    label = directive.options.get("caption") or directive.path
-    if directive.collapsible:
-        open_attr = " open" if directive.expanded_by_default else ""
-        return (
-            '<div class="code-box" markdown="1">\n'
-            f'<details class="collapsible-code"{open_attr} markdown="1">\n'
-            f'<summary class="code-summary"><a href="{html.escape(href, quote=True)}">{html.escape(label)}</a> '
-            '<span class="expand-hint">(click to expand)</span></summary>\n\n'
-            f"{_fence_block(code, lang)}"
-            "</details>\n"
-            f"{_render_output_markdown(output)}"
-            "</div>\n"
-        )
-    return (
-        '<div class="code-box" markdown="1">\n'
-        f'<div class="code-header"><a href="{html.escape(href, quote=True)}">{html.escape(label)}</a></div>\n\n'
-        f"{_fence_block(code, lang)}"
-        f"{_render_output_markdown(output)}"
-        "</div>\n"
-    )
-
-
-def render_source_embed(src: Path, ctx: BuildContext, directive: SrcDirective) -> str:
-    if ctx.options.output_mode == "jekyll":
-        return render_source_embed_markdown(src, ctx, directive)
+def render_source_embed_html(src: Path, ctx: BuildContext, directive: SrcDirective) -> str:
     if not src.exists():
         message = f"source file not found: {directive.path}"
         if ctx.options.strict:
@@ -235,17 +178,24 @@ def render_source_embed(src: Path, ctx: BuildContext, directive: SrcDirective) -
     if directive.collapsible:
         open_attr = " open" if directive.expanded_by_default else ""
         code_html = (
-            '<div class="code-box">\n'
+            '<div class="code-box" markdown="1">\n'
             f'<details class="collapsible-code"{open_attr}>\n'
             f'<summary class="code-summary"><a href="{html.escape(href, quote=True)}">{html.escape(label)}</a> '
             '<span class="expand-hint">(click to expand)</span></summary>\n'
             f'{highlighted}\n'
-            '</details>\n'
-            f'{_render_output(output)}'
-            '</div>\n'
+            "</details>\n"
+            f"{_render_output(output)}"
+            "</div>\n"
         )
         return code_html
-    return '<div class="code-box">\n' + header + highlighted + _render_output(output) + '</div>\n'
+    return '<div class="code-box" markdown="1">\n' + header + highlighted + _render_output(output) + "</div>\n"
+
+
+def render_source_embed(src: Path, ctx: BuildContext, directive: SrcDirective) -> str:
+    html_text = render_source_embed_html(src, ctx, directive)
+    if ctx.options.output_mode == "jekyll":
+        return html_text
+    return html_text.replace('<div class="code-box" markdown="1">', '<div class="code-box">')
 
 
 def render_inline_source(code: str, lang: str, flags: set[str]) -> str:
@@ -254,12 +204,6 @@ def render_inline_source(code: str, lang: str, flags: set[str]) -> str:
     if "godbolt" in flags:
         extra = '<div class="code-header"><a href="https://godbolt.org/" target="_blank" rel="noopener">Open in Compiler Explorer</a></div>\n'
     return '<div class="code-box inline-source">\n' + extra + highlighted + '</div>\n'
-
-
-def render_inline_source_markdown(code: str, lang: str, flags: set[str]) -> str:
-    if "godbolt" in flags:
-        return "[Open in Compiler Explorer](https://godbolt.org/)\n\n" + _fence_block(code, lang)
-    return _fence_block(code, lang)
 
 
 def expand_code_directives(text: str, ctx: BuildContext) -> str:
@@ -287,11 +231,7 @@ def expand_code_directives(text: str, ctx: BuildContext) -> str:
                 i += 1
             if i < len(lines) and lines[i].strip() == "@src-end":
                 i += 1
-            code = "\n".join(block) + "\n"
-            if ctx.options.output_mode == "jekyll":
-                out.append(render_inline_source_markdown(code, lang, flags))
-            else:
-                out.append(render_inline_source(code, lang, flags))
+            out.append(render_inline_source("\n".join(block) + "\n", lang, flags))
             continue
         out.append(lines[i])
         i += 1

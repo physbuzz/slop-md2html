@@ -6,7 +6,7 @@ import sys
 
 from md2html.builder import MarkdownSiteBuilder
 from md2html.code import _default_command
-from md2html.cli import build_jobs, discover_sources, make_parser, output_exclusions
+from md2html.cli import build_jobs, discover_sources, filter_jekyll_sources, make_parser, output_exclusions
 from md2html.config import BuildOptions
 from md2html.directives import iter_include_paths, iter_src_directives, parse_src_directive
 from md2html.frontmatter import dump_frontmatter, split_frontmatter
@@ -158,6 +158,7 @@ def test_builder_renders_includes_images_toc_and_code(tmp_path: Path):
     (tmp_path / "code" / "hello.out").write_text("hello\n", encoding="utf-8")
     (tmp_path / "img").mkdir()
     (tmp_path / "img" / "pic.svg").write_text("<svg></svg>", encoding="utf-8")
+    (tmp_path / "img" / "_private.svg").write_text("<svg></svg>", encoding="utf-8")
     source = tmp_path / "note.md"
     source.write_text(
         """---
@@ -216,6 +217,7 @@ render_with_liquid: false
 
 <div style="text-align: center;">
   <img src="img/pic.svg" style="width: 50%;" alt="Raw picture">
+  <img src="img/_private.svg" alt="Private picture">
 </div>
 
 ## Exercises
@@ -228,27 +230,40 @@ render_with_liquid: false
 """,
         encoding="utf-8",
     )
-    out = tmp_path / "jekyll" / "note.md"
-    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, output_mode="jekyll")).build_file(source, out)
+    output_root = tmp_path / "jekyll"
+    out = output_root / "notes" / "note.md"
+    builder = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, output_mode="jekyll", jekyll_output_root=output_root))
+    result = builder.build_file(source, out)
+    builder.write_jekyll_assets(output_root)
     text = out.read_text(encoding="utf-8")
 
     assert result.written
     assert "layout: post" in text
     assert "title: Test Note" in text
     assert "render_with_liquid: false" in text
-    assert "pygments: true" in text
+    assert "md2html_styles:" in text
+    assert "- ../md2html_pygments_compat.css" in text
+    assert "pygments: true" not in text
     assert "## Directory" in text
     assert "- *Exercises:* ([Exercise 2.77](#exercise-277))" in text
     assert "![Picture](img/pic.svg){: .obsidian-image style=\"width: 70%;\"}" in text
     assert '<div style="text-align: center;">' in text
     assert '<img src="img/pic.svg" style="width: 50%;" alt="Raw picture">' in text
+    assert '<img src="img/_private.svg" alt="Private picture">' in text
     assert '<div class="code-box" markdown="1">' in text
     assert '<div class="code-header"><a href="code/hello.py">code/hello.py</a></div>' in text
-    assert '<details class="collapsible-code" markdown="1">' in text
+    assert '<details class="collapsible-code">' in text
     assert '<summary class="code-summary"><a href="code/hello.py">code/hello.py</a>' in text
-    assert "```python\nprint('hello')\n```" in text
-    assert '<div class="code-output" markdown="1">' in text
-    assert "```text\nhello\n```" in text
+    assert '<div class="codehilite">' in text
+    assert '<div class="code-output">' in text
+    assert '<pre>hello\n</pre>' in text
+    assert "```python" not in text
+    assert not (out.parent / "md2html_pygments_compat.css").exists()
+    css = output_root / "md2html_pygments_compat.css"
+    assert css.exists()
+    assert ".codehilite" in css.read_text(encoding="utf-8")
+    assert (out.parent / "img" / "pic.svg").exists()
+    assert not (out.parent / "img" / "_private.svg").exists()
 
 
 def test_jekyll_cli_jobs_use_markdown_suffix(tmp_path: Path):
@@ -260,6 +275,20 @@ def test_jekyll_cli_jobs_use_markdown_suffix(tmp_path: Path):
     jobs = build_jobs([page], [site], site / "jekyll", recursive=True, output_suffix=".md")
 
     assert jobs == [(page, site / "jekyll" / "index.md")]
+
+
+def test_jekyll_source_filter_skips_private_paths(tmp_path: Path):
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.md").write_text("# Home\n", encoding="utf-8")
+    (site / "_draft.md").write_text("# Draft\n", encoding="utf-8")
+    (site / "_partials").mkdir()
+    (site / "_partials" / "card.md").write_text("# Card\n", encoding="utf-8")
+
+    sources = discover_sources([site], recursive=True)
+    filtered = filter_jekyll_sources(sources, [site], recursive=True)
+
+    assert filtered == [site / "index.md"]
 
 
 def test_src_collapsible_is_expanded_and_plain_src_is_not_collapsible(tmp_path: Path):

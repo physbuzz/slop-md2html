@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import BuildOptions
-from .paths import resolve_lenient, resolve_markdown_reference
+from .paths import has_private_path_part, resolve_lenient, resolve_markdown_reference
 
 
 @dataclass
@@ -59,7 +59,12 @@ class BuildContext:
             return raw
         source = self.resolve_relative(raw, current_file=current_file)
         rel = Path(raw)
-        if self.options.copy_assets and source.exists() and source.is_file():
+        if (
+            self.options.copy_assets
+            and source.exists()
+            and source.is_file()
+            and not (self.options.output_mode == "jekyll" and has_private_path_part(rel))
+        ):
             self.assets.append((source, rel))
         return rel.as_posix()
 

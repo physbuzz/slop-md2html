@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Iterable
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 from .builder import MarkdownSiteBuilder, load_options
 from .config import load_config_file
 from .errors import Md2HtmlError
-from .paths import dedupe_paths, is_ignored
+from .paths import dedupe_paths, has_private_path_part, is_ignored
 from .watch import serve_and_watch
 
 _HTML_SUFFIXES = {".html", ".htm"}
@@ -104,6 +105,31 @@ def output_exclusions(output: Path | None, sources: list[Path], jobs: list[tuple
     return dedupe_paths(ignored_roots), dedupe_paths(ignored_files)
 
 
+def jekyll_output_root(output: Path | None, jobs: list[tuple[Path, Path]]) -> Path | None:
+    if not jobs:
+        return None
+    if output is not None and output.suffix.lower() not in _FILE_SUFFIXES:
+        return output.expanduser()
+    parents = [out.parent for _src, out in jobs]
+    try:
+        return Path(os.path.commonpath([str(parent) for parent in parents]))
+    except ValueError:
+        return parents[0]
+
+
+def filter_jekyll_sources(sources: list[Path], input_roots: list[Path], *, recursive: bool) -> list[Path]:
+    out: list[Path] = []
+    for src in sources:
+        root = _root_for(src, input_roots, recursive=recursive)
+        try:
+            rel = src.resolve().relative_to(root.resolve())
+        except ValueError:
+            rel = Path(src.name)
+        if not has_private_path_part(rel):
+            out.append(src)
+    return out
+
+
 def watch_roots_from_inputs(input_roots: list[Path]) -> list[Path]:
     roots: list[Path] = []
     for root in input_roots:
@@ -188,27 +214,39 @@ def main(argv: list[str] | None = None) -> int:
 
         def make_jobs() -> list[tuple[Path, Path]]:
             current_sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=pre_excludes)
+            if options.output_mode == "jekyll":
+                current_sources = filter_jekyll_sources(current_sources, input_roots, recursive=recursive)
             current_jobs = build_jobs(current_sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
             ignored_roots, _ignored_files = output_exclusions(output, current_sources, current_jobs)
             if any(root not in pre_excludes for root in ignored_roots):
                 # Handles the edge case where multiple inputs make an .html-looking
                 # output path behave like a directory.
                 current_sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=ignored_roots)
+                if options.output_mode == "jekyll":
+                    current_sources = filter_jekyll_sources(current_sources, input_roots, recursive=recursive)
                 current_jobs = build_jobs(current_sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
             return current_jobs
 
         sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=pre_excludes)
+        if options.output_mode == "jekyll":
+            sources = filter_jekyll_sources(sources, input_roots, recursive=recursive)
         jobs = build_jobs(sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
         ignored_roots, ignored_files = output_exclusions(output, sources, jobs)
         if ignored_roots != pre_excludes:
             sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=ignored_roots)
+            if options.output_mode == "jekyll":
+                sources = filter_jekyll_sources(sources, input_roots, recursive=recursive)
             jobs = build_jobs(sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
             ignored_roots, ignored_files = output_exclusions(output, sources, jobs)
+        if options.output_mode == "jekyll":
+            options.jekyll_output_root = jekyll_output_root(output, jobs)
 
         if args.dry_run:
             print(builder.dry_run_json(jobs))
             return 0
         if args.watch or args.serve:
+            if options.output_mode == "jekyll" and options.jekyll_output_root is not None:
+                builder.write_jekyll_assets(options.jekyll_output_root)
             serve_and_watch(
                 builder,
                 jobs,
@@ -230,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.verbose or options.verbose:
                 action = "skipped" if result.skipped else "built"
                 print(f"{action}: {src} -> {out}")
+        if options.output_mode == "jekyll" and options.jekyll_output_root is not None and failures == 0:
+            builder.write_jekyll_assets(options.jekyll_output_root)
         return 1 if failures else 0
     except (Md2HtmlError, OSError, FileNotFoundError, RuntimeError) as exc:
         print(f"md2html: error: {exc}", file=sys.stderr)

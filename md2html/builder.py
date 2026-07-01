@@ -14,12 +14,15 @@ from .errors import BuildError
 from .frontmatter import split_frontmatter
 from .graph import build_dependency_graph
 from .rendering import (
+    JEKYLL_COMPAT_STYLESHEET,
     TocHeading,
+    jekyll_compat_css,
     plain_text,
     prepare_toc,
     process_obsidian_images_markdown,
     process_obsidian_images,
     protect_math,
+    queue_html_image_assets,
     render_jekyll_markdown,
     render_markdown,
     render_template,
@@ -57,6 +60,14 @@ class BuildResult:
 _HEADING1_PREFIX = "# "
 
 
+def _relative_stylesheet_path(output_path: Path, root: Path | None) -> str:
+    if root is None:
+        return JEKYLL_COMPAT_STYLESHEET
+    stylesheet = root / JEKYLL_COMPAT_STYLESHEET
+    rel = os.path.relpath(stylesheet, start=output_path.parent)
+    return rel.replace(os.sep, "/")
+
+
 def _first_heading_title(markdown_text: str) -> str | None:
     in_fence = False
     fence = ""
@@ -83,6 +94,7 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
 
     body = expand_includes(body, ctx, current_file=ctx.source_path, stack=(ctx.source_path.resolve(),))
     if ctx.options.output_mode == "jekyll":
+        queue_html_image_assets(body, ctx, current_file=ctx.source_path)
         body = process_obsidian_images_markdown(body, ctx, current_file=ctx.source_path)
     else:
         body = process_obsidian_images(body, ctx, current_file=ctx.source_path)
@@ -98,6 +110,7 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
             title=title,
             metadata=metadata,
             options=ctx.options,
+            stylesheet=_relative_stylesheet_path(ctx.output_path, ctx.options.jekyll_output_root),
         )
         return document, metadata, headings
 
@@ -161,6 +174,10 @@ class MarkdownSiteBuilder:
         ctx.copy_queued_assets()
         result.written = True
         return result
+
+    def write_jekyll_assets(self, output_root: Path) -> None:
+        output_root.mkdir(parents=True, exist_ok=True)
+        (output_root / JEKYLL_COMPAT_STYLESHEET).write_text(jekyll_compat_css(), encoding="utf-8")
 
     def dry_run_json(self, jobs: list[tuple[Path, Path]]) -> str:
         graph = build_dependency_graph(jobs, self.options)

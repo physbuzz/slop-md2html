@@ -44,6 +44,7 @@ class BuildOptions:
     strict: bool = False
     verbose: bool = False
     config_file: Path | None = None
+    jekyll_output_root: Path | None = None
 
 
 def load_config_file(path: Path) -> dict[str, Any]:

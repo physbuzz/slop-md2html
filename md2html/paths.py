@@ -16,6 +16,10 @@ def is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
+def has_private_path_part(path: Path) -> bool:
+    return any(part.startswith("_") for part in path.parts)
+
+
 def dedupe_paths(paths: Iterable[Path]) -> list[Path]:
     seen: set[Path] = set()
     out: list[Path] = []

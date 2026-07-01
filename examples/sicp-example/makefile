@@ -1,5 +1,4 @@
 MD2HTML ?= $(HOME)/.local/bin/md2html
-JEKYLL ?= jekyll
 
 .PHONY: all html jekyll
 
