@@ -93,6 +93,8 @@ md2html note.md --format jekyll
 md2html note.md --execute
 ```
 
+`--format jekyll` writes Markdown files with YAML front matter so Jekyll can run its normal Markdown, layout, and styling pipeline.
+
 ## Directives
 
 ### `@toc`
@@ -192,6 +194,6 @@ print(result.as_dict())
 
 ## Implemented now versus extension points
 
-Implemented now: MathJax output, math shielding, `@toc`, recursive `@include`, circular include errors, Obsidian image embeds, Pygments highlighting, plain/collapsible/collapsed source blocks, optional source execution, `.out` embedding, a small article-level dependency graph, Jekyll-style output, default templates, dry-run JSON, watchdog-powered watch mode, output-directory exclusions for site builds, a development server, and `make install` for a PyInstaller executable.
+Implemented now: MathJax output, math shielding, `@toc`, recursive `@include`, circular include errors, Obsidian image embeds, Pygments highlighting, plain/collapsible/collapsed source blocks, optional source execution, `.out` embedding, a small article-level dependency graph, Jekyll Markdown output, default templates, dry-run JSON, watchdog-powered watch mode, output-directory exclusions for site builds, a development server, and `make install` for a PyInstaller executable.
 
 Designed as extension points: MathML/SVG math backends, richer Godbolt URL state generation, stronger sandboxing for executed code, and production-grade live browser reload. The dependency graph is intentionally not a general build-system DAG. It models Markdown `@include` relationships and direct article dependencies like `@src(main.cpp) -> page.md`; it does not inspect language-level dependencies such as C/C++ headers or Racket imports.

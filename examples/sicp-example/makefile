@@ -1,7 +1,7 @@
 MD2HTML ?= $(HOME)/.local/bin/md2html
 JEKYLL ?= jekyll
 
-.PHONY: html jekyll
+.PHONY: all html jekyll
 
 all: html jekyll
 
@@ -13,3 +13,4 @@ jekyll:
 
 clean:
 	rm -r html
+	find jekyll -mindepth 1 -maxdepth 1 ! -name '_layouts' -exec rm -rf -- {} +

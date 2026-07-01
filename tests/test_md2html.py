@@ -11,7 +11,7 @@ from md2html.config import BuildOptions
 from md2html.directives import iter_include_paths, iter_src_directives, parse_src_directive
 from md2html.frontmatter import dump_frontmatter, split_frontmatter
 from md2html.paths import source_output_path
-from md2html.rendering import Slugger, collect_headings, generate_toc, protect_math, restore_math
+from md2html.rendering import Slugger, collect_headings, generate_toc, generate_toc_markdown, protect_math, restore_math
 from md2html.watch import (
     WatchExclusions,
     _initial_build_message,
@@ -59,6 +59,29 @@ def test_toc_compacts_exercises():
     assert "toc-exercises" in toc
     assert "#exercise-277" in toc
     assert "#exercise-278" in toc
+    assert "Solution" not in toc
+
+
+def test_markdown_toc_compacts_exercises():
+    md = """# Title
+
+@toc
+
+## Section 1
+
+## Exercises
+
+### Exercise 2.77
+
+### Solution
+
+### Exercise 2.78
+"""
+    headings = collect_headings(md)
+    toc = generate_toc_markdown(headings)
+    assert "## Directory" in toc
+    assert "- [Section 1](#section-1)" in toc
+    assert "- *Exercises:* ([Exercise 2.77](#exercise-277), [Exercise 2.78](#exercise-278))" in toc
     assert "Solution" not in toc
 
 
@@ -170,6 +193,73 @@ title: Test Note
     assert '<details class="collapsible-code" open>' not in html
     assert "hello" in html
     assert "width: 70%" in html
+
+
+def test_jekyll_output_is_markdown_with_frontmatter_and_directive_expansion(tmp_path: Path):
+    (tmp_path / "code").mkdir()
+    (tmp_path / "code" / "hello.py").write_text("print('hello')\n", encoding="utf-8")
+    (tmp_path / "code" / "hello.out").write_text("hello\n", encoding="utf-8")
+    (tmp_path / "img").mkdir()
+    (tmp_path / "img" / "pic.svg").write_text("<svg></svg>", encoding="utf-8")
+    source = tmp_path / "note.md"
+    source.write_text(
+        """---
+title: Test Note
+layout: post
+render_with_liquid: false
+---
+@toc
+
+## Section 1
+
+![[img/pic.svg|width=70%|alt=Picture]]
+
+<div style="text-align: center;">
+  <img src="img/pic.svg" style="width: 50%;" alt="Raw picture">
+</div>
+
+## Exercises
+
+### Exercise 2.77
+
+@src(code/hello.py)
+
+@src(code/hello.py, collapsed)
+""",
+        encoding="utf-8",
+    )
+    out = tmp_path / "jekyll" / "note.md"
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, output_mode="jekyll")).build_file(source, out)
+    text = out.read_text(encoding="utf-8")
+
+    assert result.written
+    assert "layout: post" in text
+    assert "title: Test Note" in text
+    assert "render_with_liquid: false" in text
+    assert "pygments: true" in text
+    assert "## Directory" in text
+    assert "- *Exercises:* ([Exercise 2.77](#exercise-277))" in text
+    assert "![Picture](img/pic.svg){: .obsidian-image style=\"width: 70%;\"}" in text
+    assert '<div style="text-align: center;">' in text
+    assert '<img src="img/pic.svg" style="width: 50%;" alt="Raw picture">' in text
+    assert '<div class="code-box" markdown="1">' in text
+    assert '<div class="code-header"><a href="code/hello.py">code/hello.py</a></div>' in text
+    assert '<details class="collapsible-code" markdown="1">' in text
+    assert '<summary class="code-summary"><a href="code/hello.py">code/hello.py</a>' in text
+    assert "```python\nprint('hello')\n```" in text
+    assert '<div class="code-output" markdown="1">' in text
+    assert "```text\nhello\n```" in text
+
+
+def test_jekyll_cli_jobs_use_markdown_suffix(tmp_path: Path):
+    site = tmp_path / "site"
+    site.mkdir()
+    page = site / "index.md"
+    page.write_text("# Home\n", encoding="utf-8")
+
+    jobs = build_jobs([page], [site], site / "jekyll", recursive=True, output_suffix=".md")
+
+    assert jobs == [(page, site / "jekyll" / "index.md")]
 
 
 def test_src_collapsible_is_expanded_and_plain_src_is_not_collapsible(tmp_path: Path):

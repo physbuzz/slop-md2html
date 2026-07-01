@@ -17,11 +17,14 @@ from .rendering import (
     TocHeading,
     plain_text,
     prepare_toc,
+    process_obsidian_images_markdown,
     process_obsidian_images,
     protect_math,
+    render_jekyll_markdown,
     render_markdown,
     render_template,
     restore_math,
+    restore_math_markdown,
 )
 
 
@@ -79,14 +82,28 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
     ctx.metadata.update(metadata)
 
     body = expand_includes(body, ctx, current_file=ctx.source_path, stack=(ctx.source_path.resolve(),))
-    body = process_obsidian_images(body, ctx, current_file=ctx.source_path)
-    body, headings, _toc_html = prepare_toc(body)
+    if ctx.options.output_mode == "jekyll":
+        body = process_obsidian_images_markdown(body, ctx, current_file=ctx.source_path)
+    else:
+        body = process_obsidian_images(body, ctx, current_file=ctx.source_path)
+    body, headings, _toc = prepare_toc(body, output_mode=ctx.options.output_mode)
     body, math_spans = protect_math(body)
     body = expand_code_directives(body, ctx)
+    title = str(metadata.get("title") or _first_heading_title(body) or ctx.source_path.name)
+
+    if ctx.options.output_mode == "jekyll":
+        content_markdown = restore_math_markdown(body, math_spans)
+        document = render_jekyll_markdown(
+            content=content_markdown,
+            title=title,
+            metadata=metadata,
+            options=ctx.options,
+        )
+        return document, metadata, headings
+
     content_html = render_markdown(body, ctx)
     content_html = restore_math(content_html, math_spans, ctx.options.math, output_mode=ctx.options.output_mode)
 
-    title = str(metadata.get("title") or _first_heading_title(body) or ctx.source_path.name)
     document = render_template(
         content=content_html,
         title=title,

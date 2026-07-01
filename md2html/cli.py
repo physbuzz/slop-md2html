@@ -12,6 +12,8 @@ from .paths import dedupe_paths, is_ignored
 from .watch import serve_and_watch
 
 _HTML_SUFFIXES = {".html", ".htm"}
+_MARKDOWN_SUFFIXES = {".md", ".markdown"}
+_FILE_SUFFIXES = _HTML_SUFFIXES | _MARKDOWN_SUFFIXES
 
 
 def _path_list(value) -> list[Path]:
@@ -28,7 +30,7 @@ def _explicit_output_dir(output: Path | None) -> Path | None:
     # With the md2html CLI, a suffixed .html/.htm path means "single output
     # file" when there is one source. A suffixless path such as html/ or _site/
     # is an output directory and must not be watched/discovered as source.
-    return output if output.suffix.lower() not in _HTML_SUFFIXES else None
+    return output if output.suffix.lower() not in _FILE_SUFFIXES else None
 
 
 def discover_sources(paths: list[Path], *, recursive: bool, exclude_dirs: Iterable[Path] = ()) -> list[Path]:
@@ -63,13 +65,21 @@ def _root_for(source: Path, input_roots: list[Path], *, recursive: bool) -> Path
     return source.parent
 
 
-def build_jobs(sources: list[Path], input_roots: list[Path], output: Path | None, *, recursive: bool) -> list[tuple[Path, Path]]:
+def build_jobs(
+    sources: list[Path],
+    input_roots: list[Path],
+    output: Path | None,
+    *,
+    recursive: bool,
+    output_suffix: str = ".html",
+) -> list[tuple[Path, Path]]:
     if not sources:
         return []
     if output is None:
-        return [(src, src.with_suffix(".html")) for src in sources]
+        return [(src, src.with_suffix(output_suffix)) for src in sources]
     output = output.expanduser()
-    if len(sources) == 1 and output.suffix.lower() in _HTML_SUFFIXES:
+    file_suffixes = _FILE_SUFFIXES | {output_suffix}
+    if len(sources) == 1 and output.suffix.lower() in file_suffixes:
         return [(sources[0], output)]
     jobs: list[tuple[Path, Path]] = []
     for src in sources:
@@ -78,7 +88,7 @@ def build_jobs(sources: list[Path], input_roots: list[Path], output: Path | None
             rel = src.resolve().relative_to(root.resolve())
         except ValueError:
             rel = Path(src.name)
-        jobs.append((src, output / rel.with_suffix(".html")))
+        jobs.append((src, output / rel.with_suffix(output_suffix)))
     return jobs
 
 
@@ -86,7 +96,7 @@ def output_exclusions(output: Path | None, sources: list[Path], jobs: list[tuple
     ignored_roots: list[Path] = []
     ignored_files: list[Path] = []
     if output is not None:
-        if len(sources) != 1 or output.suffix.lower() not in _HTML_SUFFIXES:
+        if len(sources) != 1 or output.suffix.lower() not in _FILE_SUFFIXES:
             ignored_roots.append(output)
         else:
             ignored_files.append(output)
@@ -174,24 +184,25 @@ def main(argv: list[str] | None = None) -> int:
         if explicit_dir is not None:
             pre_excludes.append(explicit_dir)
         pre_excludes = dedupe_paths(pre_excludes)
+        output_suffix = ".md" if options.output_mode == "jekyll" else ".html"
 
         def make_jobs() -> list[tuple[Path, Path]]:
             current_sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=pre_excludes)
-            current_jobs = build_jobs(current_sources, input_roots, output, recursive=recursive)
+            current_jobs = build_jobs(current_sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
             ignored_roots, _ignored_files = output_exclusions(output, current_sources, current_jobs)
             if any(root not in pre_excludes for root in ignored_roots):
                 # Handles the edge case where multiple inputs make an .html-looking
                 # output path behave like a directory.
                 current_sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=ignored_roots)
-                current_jobs = build_jobs(current_sources, input_roots, output, recursive=recursive)
+                current_jobs = build_jobs(current_sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
             return current_jobs
 
         sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=pre_excludes)
-        jobs = build_jobs(sources, input_roots, output, recursive=recursive)
+        jobs = build_jobs(sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
         ignored_roots, ignored_files = output_exclusions(output, sources, jobs)
         if ignored_roots != pre_excludes:
             sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=ignored_roots)
-            jobs = build_jobs(sources, input_roots, output, recursive=recursive)
+            jobs = build_jobs(sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
             ignored_roots, ignored_files = output_exclusions(output, sources, jobs)
 
         if args.dry_run:

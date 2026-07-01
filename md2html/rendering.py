@@ -15,6 +15,7 @@ from pygments.util import ClassNotFound
 
 from .config import BuildOptions, MathConfig
 from .context import BuildContext
+from .frontmatter import dump_frontmatter
 from .resources import package_resource_path
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -136,6 +137,17 @@ def _exercise_list(headings: list[TocHeading]) -> str:
     return '<div class="exercise-container">(<span class="exercise-list">\n' f'{links}\n' '</span>)\n</div>'
 
 
+def _markdown_link(heading: TocHeading) -> str:
+    return f"[{heading.text}](#{heading.id})"
+
+
+def _exercise_markdown_list(headings: list[TocHeading]) -> str:
+    if not headings:
+        return ""
+    links = ", ".join(_markdown_link(h) for h in headings)
+    return f"  - *Exercises:* ({links})"
+
+
 def generate_toc(headings: list[TocHeading], *, title: str = "Directory") -> str:
     if not headings:
         return ""
@@ -179,14 +191,33 @@ def generate_toc(headings: list[TocHeading], *, title: str = "Directory") -> str
     return "\n".join(lines)
 
 
-def replace_toc(markdown_text: str, toc_html: str) -> str:
-    return _TOC_RE.sub(lambda _m: "\n" + toc_html + "\n", markdown_text)
+def generate_toc_markdown(headings: list[TocHeading], *, title: str = "Directory") -> str:
+    if not headings:
+        return ""
+
+    exercises = [h for h in headings if _EXERCISE_RE.match(h.text)]
+    exercise_ids = {h.id for h in exercises}
+    lines = [f"## {title}"]
+    for heading in headings:
+        if heading.id in exercise_ids:
+            continue
+        indent = "  " * max(0, heading.level - 2)
+        lines.append(f"{indent}- {_markdown_link(heading)}")
+        if heading.text.lower() == "exercises":
+            exercise_line = _exercise_markdown_list(exercises)
+            if exercise_line:
+                lines.append(f"{indent}{exercise_line}")
+    return "\n".join(lines)
 
 
-def prepare_toc(markdown_text: str) -> tuple[str, list[TocHeading], str]:
+def replace_toc(markdown_text: str, toc: str) -> str:
+    return _TOC_RE.sub(lambda _m: "\n" + toc + "\n", markdown_text)
+
+
+def prepare_toc(markdown_text: str, *, output_mode: str = "html") -> tuple[str, list[TocHeading], str]:
     headings = collect_headings(markdown_text)
-    toc_html = generate_toc(headings)
-    return replace_toc(markdown_text, toc_html), headings, toc_html
+    toc = generate_toc_markdown(headings) if output_mode == "jekyll" else generate_toc(headings)
+    return replace_toc(markdown_text, toc), headings, toc
 
 
 @dataclass(frozen=True)
@@ -267,8 +298,6 @@ def render_math_span(span: MathSpan, config: MathConfig, *, output_mode: str = "
     data_tex = html.escape(source, quote=True).replace("\n", "&#10;")
     rendered_source = html.escape(raw)
 
-    if output_mode == "jekyll" and span.display:
-        return f'<div class="math display" data-tex="{data_tex}">{rendered_source}</div>'
     if span.display:
         return f'<div class="math display" data-tex="{data_tex}">{rendered_source}</div>'
     return f'<span class="math inline" data-tex="{data_tex}">{rendered_source}</span>'
@@ -282,6 +311,12 @@ def restore_math(html_text: str, spans: list[MathSpan], config: MathConfig, *, o
             html_text = pattern.sub(lambda _m, rendered=rendered: rendered, html_text)
         html_text = html_text.replace(span.placeholder, rendered)
     return html_text
+
+
+def restore_math_markdown(markdown_text: str, spans: list[MathSpan]) -> str:
+    for span in spans:
+        markdown_text = markdown_text.replace(span.placeholder, span.text)
+    return markdown_text
 
 
 def _parse_image_parts(body: str) -> tuple[str, dict[str, str]]:
@@ -334,6 +369,31 @@ def process_obsidian_images(text: str, ctx: BuildContext, *, current_file: Path 
             else:
                 attr_bits.append(f'width="{html.escape(width, quote=True)}"')
         return "<img " + " ".join(attr_bits) + ">"
+
+    return _OBSIDIAN_IMAGE_RE.sub(repl, text)
+
+
+def process_obsidian_images_markdown(text: str, ctx: BuildContext, *, current_file: Path | None = None) -> str:
+    def repl(match: re.Match[str]) -> str:
+        target, attrs = _parse_image_parts(match.group("body"))
+        url = ctx.asset_url(target, current_file=current_file)
+        alt = attrs.get("alt") or Path(target).stem.replace("-", " ").replace("_", " ")
+        classes = ["obsidian-image"]
+        default_class = ctx.options.images.class_name
+        if default_class:
+            classes.append(default_class)
+        if attrs.get("class"):
+            classes.extend(attrs["class"].split())
+        width = attrs.get("width") or ctx.options.images.width
+        attr_bits = [f".{klass}" for klass in classes]
+        if width:
+            width = _normalize_width(width)
+            if _looks_like_percent(width) or width.endswith("px") or width.endswith("em") or width.endswith("rem"):
+                attr_bits.append(f'style="width: {width};"')
+            else:
+                attr_bits.append(f'width="{width}"')
+        attrs_text = "{: " + " ".join(attr_bits) + "}" if attr_bits else ""
+        return f"![{alt}]({url}){attrs_text}"
 
     return _OBSIDIAN_IMAGE_RE.sub(repl, text)
 
@@ -431,7 +491,7 @@ def render_template(
     template_name: str | None = None,
 ) -> str:
     env = make_environment(options)
-    name = template_name or ("jekyll.html" if options.output_mode == "jekyll" else options.template)
+    name = template_name or options.template
     template = env.get_template(name)
     css = ""
     stylesheets: list[str] = []
@@ -450,3 +510,20 @@ def render_template(
         lang=metadata.get("lang", "en"),
         layout=metadata.get("layout", "post"),
     )
+
+
+def render_jekyll_markdown(
+    *,
+    content: str,
+    title: str,
+    metadata: dict[str, Any],
+    options: BuildOptions,
+) -> str:
+    frontmatter = {key: value for key, value in metadata.items() if key != "template"}
+    frontmatter["layout"] = frontmatter.get("layout", "post")
+    frontmatter["title"] = title
+    md2html = dict(frontmatter.get("md2html") or {})
+    md2html.setdefault("math", options.math.backend == "mathjax")
+    md2html.setdefault("pygments", True)
+    frontmatter["md2html"] = md2html
+    return dump_frontmatter(frontmatter) + content
