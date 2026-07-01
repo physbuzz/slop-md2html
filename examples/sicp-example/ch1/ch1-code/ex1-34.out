@@ -1,7 +1,0 @@
-
-Error (exit code 1):
-application: not a procedure;
- expected a procedure that can be applied to arguments
-  given: 2
-  context...:
-   body of "/home/dkmoore/sicp/src/ch1/ch1-code/ex1-34.rkt"

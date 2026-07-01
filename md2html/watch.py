@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import http.server
 import contextlib
+import errno
 import socketserver
 import threading
 import time
@@ -176,13 +177,17 @@ def _make_observer():
     return Observer()
 
 
+class _ReusableTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
+
 def local_server_url(port: int, *, host: str = "127.0.0.1") -> str:
     return f"http://{host}:{port}/"
 
 
 def _watch_root_message(roots: Iterable[Path], exclusions: WatchExclusions) -> str:
     watched = ", ".join(str(root) for root in roots if not exclusions.ignores(root))
-    return f"watching with watchdog: {watched}"
+    return f"watching: {watched}"
 
 
 def _stop_observer(observer) -> None:  # type: ignore[no-untyped-def]
@@ -193,6 +198,15 @@ def _stop_observer(observer) -> None:  # type: ignore[no-untyped-def]
     except RuntimeError as exc:
         if "release unlocked lock" not in str(exc):
             raise
+
+
+def _make_http_server(handler, port: int):  # type: ignore[no-untyped-def]
+    try:
+        return _ReusableTCPServer(("", port), handler)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            raise RuntimeError(f"port {port} is already in use") from exc
+        raise
 
 
 def watch_jobs(
@@ -291,7 +305,8 @@ def serve_and_watch(
     output_dirs = {out.parent.resolve() for _src, out in jobs}
     serve_dir = sorted(output_dirs, key=lambda p: len(str(p)))[0] if output_dirs else Path.cwd()
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(serve_dir))
-    with socketserver.TCPServer(("", port), handler) as httpd:
+    httpd = _make_http_server(handler, port)
+    with httpd:
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         print(f"{local_server_url(port)}", flush=True)

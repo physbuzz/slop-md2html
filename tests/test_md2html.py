@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import errno
+import sys
 
 from md2html.builder import MarkdownSiteBuilder
-from md2html.cli import build_jobs, discover_sources, output_exclusions
+from md2html.code import _default_command
+from md2html.cli import build_jobs, discover_sources, make_parser, output_exclusions
 from md2html.config import BuildOptions
 from md2html.directives import iter_include_paths, iter_src_directives, parse_src_directive
 from md2html.frontmatter import dump_frontmatter, split_frontmatter
 from md2html.paths import source_output_path
 from md2html.rendering import Slugger, collect_headings, generate_toc, protect_math, restore_math
-from md2html.watch import WatchExclusions, _stop_observer, local_server_url
+from md2html.watch import WatchExclusions, _make_http_server, _stop_observer, _watch_root_message, local_server_url
 
 
 def test_slug_policy_matches_examples():
@@ -237,6 +240,31 @@ def test_dry_run_with_execute_does_not_create_out_file(tmp_path: Path):
     assert (tmp_path / "code" / "hello.out").resolve() in result.dependencies
 
 
+def test_execute_creates_missing_out_file(tmp_path: Path):
+    (tmp_path / "code").mkdir()
+    src = tmp_path / "code" / "hello.py"
+    src.write_text("print('hello from execute')\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    page.write_text("@src(code/hello.py)\n", encoding="utf-8")
+    html_out = tmp_path / "page.html"
+    out_file = tmp_path / "code" / "hello.out"
+
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, execute=True)).build_file(page, html_out)
+
+    assert result.written
+    assert out_file.read_text(encoding="utf-8") == "hello from execute\n"
+    assert out_file.resolve() in result.dependencies
+    assert "hello from execute" in html_out.read_text(encoding="utf-8")
+
+
+def test_default_python_execution_uses_external_python_when_frozen(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    command = _default_command(tmp_path / "hello.py")
+
+    assert command is not None
+    assert Path(command[0]).name in {"python", "python3"}
+
+
 def test_source_output_path_uses_configured_suffix_consistently(tmp_path: Path):
     src = tmp_path / "code" / "hello.py"
     assert source_output_path(src, ".run") == tmp_path / "code" / "hello.run"
@@ -252,6 +280,39 @@ def test_watch_exclusions_ignore_generated_code_outputs_when_execute_is_enabled(
 
 def test_local_server_url_is_clickable_loopback_url():
     assert local_server_url(8000) == "http://127.0.0.1:8000/"
+
+
+def test_watch_help_describes_serving_behavior():
+    actions = {option: action for action in make_parser()._actions for option in action.option_strings}
+    assert actions["--watch"].help == "Start a local development server, watch inputs, and rebuild on change"
+    assert actions["--serve"].help == "Alias for --watch"
+
+
+def test_watch_status_message_hides_implementation_detail(tmp_path: Path):
+    message = _watch_root_message([tmp_path], WatchExclusions())
+    assert message == f"watching: {tmp_path}"
+    assert "watchdog" not in message
+
+
+def test_http_server_reports_busy_requested_port(monkeypatch):
+    calls: list[int] = []
+
+    class Server:
+        def __init__(self, address, handler):
+            port = address[1]
+            calls.append(port)
+            raise OSError(errno.EADDRINUSE, "Address already in use")
+
+    monkeypatch.setattr("md2html.watch._ReusableTCPServer", Server)
+
+    try:
+        _make_http_server(object(), 8000)
+    except RuntimeError as exc:
+        assert str(exc) == "port 8000 is already in use"
+    else:
+        raise AssertionError("expected busy port to fail")
+
+    assert calls == [8000]
 
 
 def test_stop_observer_suppresses_watchdog_shutdown_race():

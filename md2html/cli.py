@@ -9,7 +9,7 @@ from .builder import MarkdownSiteBuilder, load_options
 from .config import load_config_file
 from .errors import Md2HtmlError
 from .paths import dedupe_paths, is_ignored
-from .watch import local_server_url, serve_and_watch, watch_jobs
+from .watch import serve_and_watch
 
 _HTML_SUFFIXES = {".html", ".htm"}
 
@@ -120,8 +120,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("files", nargs="*", help="Markdown files or directories to process")
     parser.add_argument("-o", "--output", type=Path, help="Output file for one input or output directory for many inputs")
     parser.add_argument("-r", "--recursive", action="store_true", help="Process directories recursively")
-    parser.add_argument("-w", "--watch", action="store_true", help="Watch inputs and rebuild on change")
-    parser.add_argument("-s", "--serve", action="store_true", help="Start a local development server; implies --watch")
+    parser.add_argument("-w", "--watch", action="store_true", help="Start a local development server, watch inputs, and rebuild on change")
+    parser.add_argument("-s", "--serve", action="store_true", help="Alias for --watch")
     parser.add_argument("-p", "--port", type=int, default=8000, help="Development server port (default: 8000)")
     parser.add_argument("-e", "--execute", action="store_true", help="Execute @src code embeds and refresh .out files")
     parser.add_argument("-n", "--no-overwrite", action="store_true", help="Do not overwrite existing files")
@@ -197,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             print(builder.dry_run_json(jobs))
             return 0
-        if args.serve:
+        if args.watch or args.serve:
             serve_and_watch(
                 builder,
                 jobs,
@@ -206,18 +206,6 @@ def main(argv: list[str] | None = None) -> int:
                 ignored_roots=ignored_roots,
                 ignored_files=ignored_files,
                 port=args.port,
-                verbose=args.verbose,
-            )
-            return 0
-        if args.watch:
-            print(f"watching only; no HTTP server started. Use --serve for {local_server_url(args.port)}", flush=True)
-            watch_jobs(
-                builder,
-                jobs,
-                job_provider=make_jobs,
-                watch_roots=watch_roots_from_inputs(input_roots),
-                ignored_roots=ignored_roots,
-                ignored_files=ignored_files,
                 verbose=args.verbose,
             )
             return 0

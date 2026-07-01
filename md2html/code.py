@@ -40,6 +40,9 @@ def _command_from_config(src: Path, ctx: BuildContext) -> list[str] | None:
 def _default_command(src: Path) -> list[str] | None:
     suffix = src.suffix.lower()
     if suffix == ".py":
+        if getattr(sys, "frozen", False):
+            python = shutil.which("python3") or shutil.which("python")
+            return [python or "python3", str(src)]
         return [sys.executable, str(src)]
     if suffix in {".sh", ".bash"}:
         return ["bash", str(src)]
