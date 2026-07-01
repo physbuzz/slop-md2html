@@ -1,4 +1,10 @@
 
+---
+layout: post
+title: SICP Reading Group
+render_with_liquid: false
+---
+
 # SICP Reading Group
 
 ## Book club Notes
@@ -20,4 +26,3 @@
 - Twitch: [https://www.twitch.tv/codeandcoffeelb](https://www.twitch.tv/codeandcoffeelb)
 - Discord: [https://www.codeandcoffee.dev/](https://www.codeandcoffee.dev/)
 - [Racket IDE](https://www.racket-lang.org/)
-

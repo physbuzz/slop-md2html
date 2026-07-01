@@ -1,3 +1,9 @@
+---
+layout: post
+title: SICP Chapter 1.3
+render_with_liquid: false
+---
+
 <div class="nav">
     <span class="activenav"><a href="notes-ch1-2.html">← Previous</a></span>
     <span class="activenav"><a href="../index.html">↑ Up</a></span>

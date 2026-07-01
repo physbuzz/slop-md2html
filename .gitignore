@@ -15,5 +15,7 @@ dist/
 _site/
 html/
 examples/_site/
+jekyll/
+jekyll-html/
 
 AGENTS.md

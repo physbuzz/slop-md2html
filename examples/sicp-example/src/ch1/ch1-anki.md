@@ -1,4 +1,10 @@
 
+---
+layout: post
+title: SICP Chapter 1 Anki Cards
+render_with_liquid: false
+---
+
 # Chapter 1.1
 ## Question
 ### Statement

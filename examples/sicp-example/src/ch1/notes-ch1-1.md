@@ -1,3 +1,9 @@
+---
+layout: post
+title: SICP Chapter 1.1
+render_with_liquid: false
+---
+
 <div class="nav">
     <span class="inactivenav">← Previous</span>
     <span class="activenav"><a href="../index.html">↑ Up</a></span>
@@ -377,7 +383,5 @@ Use this formula to implement a cube-root procedure analogous to the square-root
 ##### Solution
 
 @src(ch1-code/ex1-8.rkt)
-
-
 
 
