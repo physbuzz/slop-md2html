@@ -281,6 +281,33 @@ render_with_liquid: false
     assert not (out.parent / "img" / "_private.svg").exists()
 
 
+def test_jekyll_math_passthrough_keeps_dollar_delimiters(tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text("# Math Note\n\nInline $x_1$ and display:\n\n$$\n\\frac{a}{b}\n$$\n", encoding="utf-8")
+    out = tmp_path / "jekyll" / "note.md"
+    builder = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, output_mode="jekyll"))
+    builder.build_file(source, out)
+    text = out.read_text(encoding="utf-8")
+
+    assert "$x_1$" in text
+    assert "$$\n\\frac{a}{b}\n$$" in text
+    assert "data-tex" not in text
+
+
+def test_jekyll_math_html_mode_emits_data_tex_wrappers(tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text("# Math Note\n\nInline $x_1$ and display:\n\n$$\n\\frac{a}{b}\n$$\n", encoding="utf-8")
+    out = tmp_path / "jekyll" / "note.md"
+    options = BuildOptions(project_root=tmp_path, output_mode="jekyll")
+    options.jekyll.math = "html"
+    builder = MarkdownSiteBuilder(options)
+    builder.build_file(source, out)
+    text = out.read_text(encoding="utf-8")
+
+    assert '<span class="math inline" data-tex="x_1">' in text
+    assert '<div class="math display"' in text
+
+
 def test_jekyll_cli_jobs_use_markdown_suffix(tmp_path: Path):
     site = tmp_path / "site"
     site.mkdir()

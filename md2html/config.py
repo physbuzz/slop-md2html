@@ -15,6 +15,11 @@ class MathConfig:
 
 @dataclass
 class JekyllConfig:
+    # "passthrough" emits $...$ / $$...$$ verbatim (pair with kramdown's
+    # math_engine: ~ so the delimiters reach the browser for MathJax).
+    # "html" emits the same data-tex span/div wrappers as html output mode,
+    # which kramdown passes through untouched.
+    math: str = "passthrough"
     # Layout applied when a page's frontmatter has none; None omits the key.
     layout: str | None = "post"
     # Path of the generated stylesheet relative to the output root; None skips it.
@@ -101,6 +106,7 @@ def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> Bu
             backend=math_data.get("backend", data.get("math_backend", "mathjax")),
         ),
         jekyll=JekyllConfig(
+            math=jekyll_data.get("math", "passthrough"),
             layout=jekyll_data.get("layout", "post"),
             stylesheet=jekyll_data.get("stylesheet", "assets/css/md2html.css"),
             frontmatter=dict(jekyll_data.get("frontmatter", {}) or {}),

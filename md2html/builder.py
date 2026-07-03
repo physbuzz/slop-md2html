@@ -96,7 +96,10 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
     body = expand_code_directives(body, ctx)
 
     if ctx.options.output_mode == "jekyll":
-        content_markdown = restore_math_markdown(body, math_spans)
+        if ctx.options.jekyll.math == "html":
+            content_markdown = restore_math(body, math_spans, ctx.options.math)
+        else:
+            content_markdown = restore_math_markdown(body, math_spans)
         document = render_jekyll_markdown(
             content=content_markdown,
             title=title,

@@ -108,6 +108,7 @@ Site-specific behavior comes from the `jekyll` config section rather than code:
 ```json
 {
   "jekyll": {
+    "math": "passthrough",
     "layout": "post",
     "stylesheet": "assets/css/md2html.css",
     "frontmatter": {
@@ -117,9 +118,36 @@ Site-specific behavior comes from the `jekyll` config section rather than code:
 }
 ```
 
+- `math`: how math reaches the output Markdown. `"passthrough"` (default) emits `$...$` and `$$...$$` verbatim; `"html"` emits the same `<span class="math" data-tex="...">` wrappers as HTML output mode, which kramdown passes through untouched.
 - `layout`: default layout name; `null` leaves the key out entirely.
 - `stylesheet`: where to write the generated CSS, relative to the output root; `null` skips writing it.
 - `frontmatter`: defaults merged into every page's front matter; per-page front matter wins.
+
+### Math and kramdown
+
+With the default `passthrough` math, one site-side setting matters: Jekyll's kramdown defaults to `math_engine: mathjax`, which rewrites block `$$...$$` into `\[...\]` in the built HTML (and inline `$$...$$` into `\(...\)`). If your MathJax configuration expects dollar delimiters, disable the kramdown math engine in your site's `_config.yml`:
+
+```yaml
+kramdown:
+  math_engine: ~
+```
+
+kramdown then passes math through with dollar delimiters intact (wrapped in a `kdmath` span/div), and a standard MathJax setup renders it:
+
+```html
+<script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['$', '$']],
+      displayMath: [['$$', '$$']],
+      processEscapes: true
+    }
+  };
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+```
+
+`examples/sicp-example/jekyll/` contains a working `_config.yml` and `_layouts/post.html` demonstrating this setup.
 
 ## Directives
 

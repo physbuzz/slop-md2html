@@ -21,6 +21,7 @@ jekyll-html/
 examples/sicp-example/jekyll/*
 !examples/sicp-example/jekyll/_layouts/
 !examples/sicp-example/jekyll/_layouts/**
+!examples/sicp-example/jekyll/_config.yml
 examples/sicp-full/html
 examples/sicp-full/src/papers/
 
