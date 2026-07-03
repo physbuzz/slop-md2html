@@ -31,7 +31,6 @@ _HTML_IMAGE_RE = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE)
 _HTML_ATTR_RE = re.compile(r"""(?P<key>[-:\w]+)(?:\s*=\s*(?P<quote>["'])(?P<quoted>.*?)(?P=quote)|\s*=\s*(?P<bare>[^\s"'>]+))?""")
 _ASSETS_DIR = package_resource_path("assets")
 _DEFAULT_TEMPLATE_DIR = package_resource_path("default_templates")
-JEKYLL_COMPAT_STYLESHEET = "md2html_pygments_compat.css"
 
 _SUFFIX_LANG = {
     ".py": "python",
@@ -238,13 +237,24 @@ def _protect_code(text: str) -> tuple[str, dict[str, str]]:
         stored[key] = match.group(0)
         return key
 
+    def store_inline(match: re.Match[str]) -> str:
+        # A stray backtick pair (e.g. TeX-style ``quotes'') can pair up with a
+        # much later backtick. A real code span never contains a blank line or
+        # an already-protected fence, so leave those matches alone.
+        content = match.group(0)
+        if "\n\n" in content or "@@MD2HTML_CODE_" in content:
+            return content
+        return store(match)
+
     text = _FENCE_RE.sub(store, text)
-    text = _INLINE_CODE_RE.sub(store, text)
+    text = _INLINE_CODE_RE.sub(store_inline, text)
     return text, stored
 
 
 def _restore_code(text: str, stored: dict[str, str]) -> str:
-    for key, value in stored.items():
+    # Inline spans are stored after fences and may contain fence placeholders,
+    # so restore newest-first to resolve nesting.
+    for key, value in reversed(stored.items()):
         text = text.replace(key, value)
     return text
 
@@ -295,7 +305,7 @@ def protect_math(text: str) -> tuple[str, list[MathSpan]]:
     return protected, spans
 
 
-def render_math_span(span: MathSpan, config: MathConfig, *, output_mode: str = "html") -> str:
+def render_math_span(span: MathSpan, config: MathConfig) -> str:
     raw = span.text
     source = raw[2:-2].strip() if span.display and raw.startswith("$$") else raw[1:-1]
     data_tex = html.escape(source, quote=True).replace("\n", "&#10;")
@@ -306,9 +316,9 @@ def render_math_span(span: MathSpan, config: MathConfig, *, output_mode: str = "
     return f'<span class="math inline" data-tex="{data_tex}">{rendered_source}</span>'
 
 
-def restore_math(html_text: str, spans: list[MathSpan], config: MathConfig, *, output_mode: str = "html") -> str:
+def restore_math(html_text: str, spans: list[MathSpan], config: MathConfig) -> str:
     for span in spans:
-        rendered = render_math_span(span, config, output_mode=output_mode)
+        rendered = render_math_span(span, config)
         if span.display:
             pattern = re.compile(r"<p>\s*" + re.escape(span.placeholder) + r"\s*</p>")
             html_text = pattern.sub(lambda _m, rendered=rendered: rendered, html_text)
@@ -350,27 +360,46 @@ def _normalize_width(value: str) -> str:
     return value
 
 
+@dataclass(frozen=True)
+class _ObsidianImage:
+    url: str
+    alt: str
+    classes: list[str]
+    style: str | None
+    width: str | None
+
+
+def _resolve_obsidian_image(match: re.Match[str], ctx: BuildContext, current_file: Path | None) -> _ObsidianImage:
+    target, attrs = _parse_image_parts(match.group("body"))
+    url = ctx.asset_url(target, current_file=current_file)
+    alt = attrs.get("alt") or Path(target).stem.replace("-", " ").replace("_", " ")
+    classes = ["obsidian-image"]
+    default_class = ctx.options.images.class_name
+    if default_class:
+        classes.append(default_class)
+    if attrs.get("class"):
+        classes.extend(attrs["class"].split())
+    width = attrs.get("width") or ctx.options.images.width
+    style = width_attr = None
+    if width:
+        width = _normalize_width(width)
+        if _looks_like_percent(width) or width.endswith(("px", "em", "rem")):
+            style = f"width: {width};"
+        else:
+            width_attr = width
+    return _ObsidianImage(url=url, alt=alt, classes=classes, style=style, width=width_attr)
+
+
 def process_obsidian_images(text: str, ctx: BuildContext, *, current_file: Path | None = None) -> str:
     def repl(match: re.Match[str]) -> str:
-        target, attrs = _parse_image_parts(match.group("body"))
-        url = ctx.asset_url(target, current_file=current_file)
-        alt = attrs.get("alt") or Path(target).stem.replace("-", " ").replace("_", " ")
-        classes = ["obsidian-image"]
-        default_class = ctx.options.images.class_name
-        if default_class:
-            classes.append(default_class)
-        if attrs.get("class"):
-            classes.extend(attrs["class"].split())
-        width = attrs.get("width") or ctx.options.images.width
-        attr_bits = [f'src="{html.escape(url, quote=True)}"', f'alt="{html.escape(alt, quote=True)}"']
-        if classes:
-            attr_bits.append(f'class="{html.escape(" ".join(classes), quote=True)}"')
-        if width:
-            width = _normalize_width(width)
-            if _looks_like_percent(width) or width.endswith("px") or width.endswith("em") or width.endswith("rem"):
-                attr_bits.append(f'style="width: {html.escape(width, quote=True)};"')
-            else:
-                attr_bits.append(f'width="{html.escape(width, quote=True)}"')
+        image = _resolve_obsidian_image(match, ctx, current_file)
+        attr_bits = [f'src="{html.escape(image.url, quote=True)}"', f'alt="{html.escape(image.alt, quote=True)}"']
+        if image.classes:
+            attr_bits.append(f'class="{html.escape(" ".join(image.classes), quote=True)}"')
+        if image.style:
+            attr_bits.append(f'style="{html.escape(image.style, quote=True)}"')
+        elif image.width:
+            attr_bits.append(f'width="{html.escape(image.width, quote=True)}"')
         return "<img " + " ".join(attr_bits) + ">"
 
     return _OBSIDIAN_IMAGE_RE.sub(repl, text)
@@ -378,25 +407,14 @@ def process_obsidian_images(text: str, ctx: BuildContext, *, current_file: Path 
 
 def process_obsidian_images_markdown(text: str, ctx: BuildContext, *, current_file: Path | None = None) -> str:
     def repl(match: re.Match[str]) -> str:
-        target, attrs = _parse_image_parts(match.group("body"))
-        url = ctx.asset_url(target, current_file=current_file)
-        alt = attrs.get("alt") or Path(target).stem.replace("-", " ").replace("_", " ")
-        classes = ["obsidian-image"]
-        default_class = ctx.options.images.class_name
-        if default_class:
-            classes.append(default_class)
-        if attrs.get("class"):
-            classes.extend(attrs["class"].split())
-        width = attrs.get("width") or ctx.options.images.width
-        attr_bits = [f".{klass}" for klass in classes]
-        if width:
-            width = _normalize_width(width)
-            if _looks_like_percent(width) or width.endswith("px") or width.endswith("em") or width.endswith("rem"):
-                attr_bits.append(f'style="width: {width};"')
-            else:
-                attr_bits.append(f'width="{width}"')
+        image = _resolve_obsidian_image(match, ctx, current_file)
+        attr_bits = [f".{klass}" for klass in image.classes]
+        if image.style:
+            attr_bits.append(f'style="{image.style}"')
+        elif image.width:
+            attr_bits.append(f'width="{image.width}"')
         attrs_text = "{: " + " ".join(attr_bits) + "}" if attr_bits else ""
-        return f"![{alt}]({url}){attrs_text}"
+        return f"![{image.alt}]({image.url}){attrs_text}"
 
     return _OBSIDIAN_IMAGE_RE.sub(repl, text)
 
@@ -564,13 +582,10 @@ def render_jekyll_markdown(
     title: str,
     metadata: dict[str, Any],
     options: BuildOptions,
-    stylesheet: str = JEKYLL_COMPAT_STYLESHEET,
 ) -> str:
-    frontmatter = {key: value for key, value in metadata.items() if key != "template"}
-    frontmatter["layout"] = frontmatter.get("layout", "post")
+    frontmatter = dict(options.jekyll.frontmatter)
+    frontmatter.update({key: value for key, value in metadata.items() if key != "template"})
+    if options.jekyll.layout and "layout" not in frontmatter:
+        frontmatter["layout"] = options.jekyll.layout
     frontmatter["title"] = title
-    styles = list(frontmatter.get("md2html_styles") or [])
-    if stylesheet not in styles:
-        styles.append(stylesheet)
-    frontmatter["md2html_styles"] = styles
     return dump_frontmatter(frontmatter) + content

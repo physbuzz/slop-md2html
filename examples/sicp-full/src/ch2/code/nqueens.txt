@@ -1,0 +1,135 @@
+#lang racket
+
+(define nil '())
+(define (flatmap proc seq)
+  (accumulate append nil (map proc seq))) 
+(define (accumulate op initial sequence)
+  (if (null? sequence)
+      initial
+      (op (car sequence)
+          (accumulate op
+                      initial
+                      (cdr sequence)))))
+(define (enumerate-interval low high)
+  (if (> low high)
+      nil
+      (cons low
+            (enumerate-interval
+             (+ low 1)
+             high))))
+(define (filter predicate sequence)
+  (cond ((null? sequence) nil)
+        ((predicate (car sequence))
+         (cons (car sequence)
+               (filter predicate
+                       (cdr sequence))))
+        (else  (filter predicate
+                       (cdr sequence)))))
+
+(define (nqueens board-size)
+  (define empty-board nil)
+  (define (last lst) 
+    (if (null? (cdr lst)) 
+      (car lst) 
+      (last (cdr lst))))
+  (define (echo x) (display x) x)
+  (define (safe? k positions)
+    ;(echo positions)
+    (define y (last positions))
+    (define (safe-loop i rest) 
+      (define yprime (car rest))
+      (if (= i k)
+        #t
+        (and (not (= yprime y))
+             (not (= (abs (- y yprime)) (abs (- k i))))
+             (safe-loop (+ i 1) (cdr rest)))))
+    (safe-loop 1 positions))
+  (define (adjoin-position new-row k rest-of-queens)
+    (append rest-of-queens (list new-row)))
+  (define (queen-cols k)
+    (if (= k 0)
+        (list empty-board)
+        (filter
+         (lambda (positions) 
+           (safe? k positions))
+         (flatmap
+          (lambda (rest-of-queens)
+            (map (lambda (new-row)
+                   (adjoin-position 
+                    new-row 
+                    k 
+                    rest-of-queens))
+                 (enumerate-interval 
+                  1 
+                  board-size)))
+          (queen-cols (- k 1))))))
+  (queen-cols board-size))
+(define (nqueens-slow board-size)
+  (define empty-board nil)
+  (define (last lst) 
+    (if (null? (cdr lst)) 
+      (car lst) 
+      (last (cdr lst))))
+  (define (echo x) (display x) x)
+  (define (safe? k positions)
+    ;(echo positions)
+    (define y (last positions))
+    (define (safe-loop i rest) 
+      (define yprime (car rest))
+      (if (= i k)
+        #t
+        (and (not (= yprime y))
+             (not (= (abs (- y yprime)) (abs (- k i))))
+             (safe-loop (+ i 1) (cdr rest)))))
+    (safe-loop 1 positions))
+  (define (adjoin-position new-row k rest-of-queens)
+    (append rest-of-queens (list new-row)))
+  (define (queen-cols k)
+    (if (= k 0)
+      (list empty-board)
+      (filter
+       (lambda (positions) 
+         (safe? k positions))
+       (flatmap
+        (lambda (new-row)
+          (map (lambda (rest-of-queens)
+                 (adjoin-position 
+                  new-row k rest-of-queens))
+               (queen-cols (- k 1))))
+        (enumerate-interval 1 board-size)))))
+  (queen-cols board-size))
+
+
+;; Timing function that measures execution time in microseconds for better precision
+(define (time thunk)
+  (define start-time (current-inexact-milliseconds))
+  (define result (thunk))
+  (define end-time (current-inexact-milliseconds))
+  ;; Convert to microseconds (1/1000000 of a second) for better precision
+  (define elapsed (* (- end-time start-time) 1000))
+  (exact-round elapsed)) ;; Round to nearest microsecond
+
+;; Function to generate CSV with timing data for both functions
+(define (compare-functions-to-csv output-file max-n)
+  (with-output-to-file output-file
+    #:exists 'replace
+    (lambda ()
+      ;; Write CSV header
+      (printf "n,nqueens_time_microsec,nqueens_slow_time_microsec\n")
+      ;; Generate rows from 1 to max-n
+      (for ([n (in-range 1 (add1 max-n))])
+        ;; Time each function
+        (define nqueens-time
+          (time (lambda () (nqueens n))))
+        (define nqueens-slow-time
+          (time (lambda () (nqueens-slow n))))
+        ;; Write the timing results to CSV
+        (printf "~a,~a,~a\n" n nqueens-time nqueens-slow-time)))))
+
+;; Example usage
+;; Assuming nqueens and nqueens-slow are already defined
+;; Generate CSV file with timing data for n=1 to n=8
+(compare-functions-to-csv "nqueens-timing.csv" 9)
+
+;; Confirm completion
+(printf "CSV file with timing data generated successfully!\n")

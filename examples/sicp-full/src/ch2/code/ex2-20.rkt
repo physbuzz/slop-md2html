@@ -1,0 +1,12 @@
+#lang sicp
+(define (same-parity a . b)
+  (define (same-parity-inner lst2 rem)
+    (cond ((null? lst2) nil)
+      	  ((= rem (remainder (car lst2) 2)) 
+	      (cons (car lst2) (same-parity-inner (cdr lst2) rem)))
+	  (else (same-parity-inner (cdr lst2) rem))))
+  (cons a (same-parity-inner b (remainder a 2))))
+(same-parity 1 2 3 4 5 6 7)
+;(1 3 5 7)
+(same-parity 2 3 4 5 6 7)
+;(2 4 6)

@@ -11,7 +11,16 @@ import yaml
 @dataclass
 class MathConfig:
     backend: str = "mathjax"  # future extension point: mathml, svg
-    wrap_display: bool = True
+
+
+@dataclass
+class JekyllConfig:
+    # Layout applied when a page's frontmatter has none; None omits the key.
+    layout: str | None = "post"
+    # Path of the generated stylesheet relative to the output root; None skips it.
+    stylesheet: str | None = "assets/css/md2html.css"
+    # Extra frontmatter merged into every page; page frontmatter wins.
+    frontmatter: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -34,6 +43,7 @@ class BuildOptions:
     template: str = "page.html"
     output_mode: str = "html"  # html or jekyll
     math: MathConfig = field(default_factory=MathConfig)
+    jekyll: JekyllConfig = field(default_factory=JekyllConfig)
     code: CodeConfig = field(default_factory=CodeConfig)
     images: ImageConfig = field(default_factory=ImageConfig)
     execute: bool = False
@@ -80,6 +90,7 @@ def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> Bu
     math_data = data.get("math", {}) or {}
     code_data = data.get("code", {}) or {}
     image_data = data.get("images", data.get("obsidian_images", {})) or {}
+    jekyll_data = data.get("jekyll", {}) or {}
 
     return BuildOptions(
         project_root=project_root,
@@ -88,7 +99,11 @@ def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> Bu
         output_mode=data.get("output_mode", data.get("format", "html")),
         math=MathConfig(
             backend=math_data.get("backend", data.get("math_backend", "mathjax")),
-            wrap_display=math_data.get("wrap_display", True),
+        ),
+        jekyll=JekyllConfig(
+            layout=jekyll_data.get("layout", "post"),
+            stylesheet=jekyll_data.get("stylesheet", "assets/css/md2html.css"),
+            frontmatter=dict(jekyll_data.get("frontmatter", {}) or {}),
         ),
         code=CodeConfig(
             commands=code_data.get("commands", {}),

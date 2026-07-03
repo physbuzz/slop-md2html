@@ -1,0 +1,22 @@
+#lang sicp
+(newline)
+(display (cdr (cdr (list 1 2))))
+(newline)
+; This gives an error (can't compare equality with nil):
+; (display (= nil (cdr (cdr (list 1 2)))))
+(display nil)
+(newline)
+(display (list 34))
+(newline)
+(display (null? (cdr (cdr (list 1 2)))))
+(newline)
+(newline)
+(newline)
+(display (list 1 2 3 4))
+(newline)
+(display (cons 1 (cons 2 (cons 3 (cons 4 nil)))))
+(newline)
+(newline)
+; not defined in sicp scheme
+;(display (last-pair (list 1 2 3 4)))
+;(display (last (list 1 2 3 4)))

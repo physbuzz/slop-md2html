@@ -14,7 +14,7 @@ from pathlib import Path
 from .builder import MarkdownSiteBuilder
 from .errors import Md2HtmlError
 from .graph import build_dependency_graph
-from .paths import dedupe_paths, is_relative_to, resolve_lenient
+from .paths import dedupe_paths, is_relative_to, resolve_lenient, source_output_path
 
 Job = tuple[Path, Path]
 JobProvider = Callable[[], list[Job]]
@@ -153,7 +153,7 @@ def _dependency_is_newer_than_output(dependency: Path, output: Path) -> bool:
 def _generated_output_is_stale(source: Path, dependencies: set[Path], builder: MarkdownSiteBuilder) -> bool:
     if not builder.options.execute:
         return False
-    generated = source.with_suffix(builder.options.code.output_suffix) if builder.options.code.output_suffix.startswith(".") else source.with_name(source.name + builder.options.code.output_suffix)
+    generated = source_output_path(source, builder.options.code.output_suffix)
     if generated not in dependencies:
         return False
     if not generated.exists():

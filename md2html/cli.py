@@ -212,32 +212,27 @@ def main(argv: list[str] | None = None) -> int:
         pre_excludes = dedupe_paths(pre_excludes)
         output_suffix = ".md" if options.output_mode == "jekyll" else ".html"
 
-        def make_jobs() -> list[tuple[Path, Path]]:
-            current_sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=pre_excludes)
+        def discover_and_pair(exclude_dirs: list[Path]) -> tuple[list[Path], list[tuple[Path, Path]]]:
+            current_sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=exclude_dirs)
             if options.output_mode == "jekyll":
                 current_sources = filter_jekyll_sources(current_sources, input_roots, recursive=recursive)
             current_jobs = build_jobs(current_sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
-            ignored_roots, _ignored_files = output_exclusions(output, current_sources, current_jobs)
+            return current_sources, current_jobs
+
+        def plan_jobs() -> tuple[list[tuple[Path, Path]], list[Path], list[Path]]:
+            current_sources, current_jobs = discover_and_pair(pre_excludes)
+            ignored_roots, ignored_files = output_exclusions(output, current_sources, current_jobs)
             if any(root not in pre_excludes for root in ignored_roots):
                 # Handles the edge case where multiple inputs make an .html-looking
                 # output path behave like a directory.
-                current_sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=ignored_roots)
-                if options.output_mode == "jekyll":
-                    current_sources = filter_jekyll_sources(current_sources, input_roots, recursive=recursive)
-                current_jobs = build_jobs(current_sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
-            return current_jobs
+                current_sources, current_jobs = discover_and_pair(ignored_roots)
+                ignored_roots, ignored_files = output_exclusions(output, current_sources, current_jobs)
+            return current_jobs, ignored_roots, ignored_files
 
-        sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=pre_excludes)
-        if options.output_mode == "jekyll":
-            sources = filter_jekyll_sources(sources, input_roots, recursive=recursive)
-        jobs = build_jobs(sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
-        ignored_roots, ignored_files = output_exclusions(output, sources, jobs)
-        if ignored_roots != pre_excludes:
-            sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=ignored_roots)
-            if options.output_mode == "jekyll":
-                sources = filter_jekyll_sources(sources, input_roots, recursive=recursive)
-            jobs = build_jobs(sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
-            ignored_roots, ignored_files = output_exclusions(output, sources, jobs)
+        def make_jobs() -> list[tuple[Path, Path]]:
+            return plan_jobs()[0]
+
+        jobs, ignored_roots, ignored_files = plan_jobs()
         if options.output_mode == "jekyll":
             options.jekyll_output_root = jekyll_output_root(output, jobs)
 

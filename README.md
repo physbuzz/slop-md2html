@@ -1,3 +1,5 @@
+Note that this is an AI written file, so this specification is not "the word of god" per se.
+
 # md2html
 
 `md2html` is a small Python page-builder for Markdown notes that need a little more than ordinary Markdown: protected TeX math, Obsidian image embeds, recursive includes, compact exercise-aware tables of contents, source-code embedding, optional source execution, and a simple static-site CLI.
@@ -93,7 +95,31 @@ md2html note.md --format jekyll
 md2html note.md --execute
 ```
 
-`--format jekyll` writes Markdown files with YAML front matter so Jekyll can run its normal Markdown, layout, and styling pipeline.
+## Jekyll output
+
+`--format jekyll` writes plain Markdown files with YAML front matter so Jekyll can run its normal Markdown, layout, and styling pipeline. The output is designed to drop into an existing Jekyll site without any md2html-specific plumbing in the site itself:
+
+- Each page keeps its own front matter. A `layout` is added only when the page has none (default `post`, configurable).
+- One stylesheet covering md2html's generated markup (code boxes, collapsible sources, image classes, Pygments classes) is written to `assets/css/md2html.css` under the output root. Include it once in your site's head, e.g. `<link rel="stylesheet" href="{{ '/assets/css/md2html.css' | relative_url }}">`, or import it from your theme's Sass.
+- Files or directories whose names start with `_` are skipped, since Jekyll treats those as private.
+
+Site-specific behavior comes from the `jekyll` config section rather than code:
+
+```json
+{
+  "jekyll": {
+    "layout": "post",
+    "stylesheet": "assets/css/md2html.css",
+    "frontmatter": {
+      "render_with_liquid": false
+    }
+  }
+}
+```
+
+- `layout`: default layout name; `null` leaves the key out entirely.
+- `stylesheet`: where to write the generated CSS, relative to the output root; `null` skips writing it.
+- `frontmatter`: defaults merged into every page's front matter; per-page front matter wins.
 
 ## Directives
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -14,7 +13,6 @@ from .errors import BuildError
 from .frontmatter import split_frontmatter
 from .graph import build_dependency_graph
 from .rendering import (
-    JEKYLL_COMPAT_STYLESHEET,
     TocHeading,
     jekyll_compat_css,
     plain_text,
@@ -60,14 +58,6 @@ class BuildResult:
 _HEADING1_PREFIX = "# "
 
 
-def _relative_stylesheet_path(output_path: Path, root: Path | None) -> str:
-    if root is None:
-        return JEKYLL_COMPAT_STYLESHEET
-    stylesheet = root / JEKYLL_COMPAT_STYLESHEET
-    rel = os.path.relpath(stylesheet, start=output_path.parent)
-    return rel.replace(os.sep, "/")
-
-
 def _first_heading_title(markdown_text: str) -> str | None:
     in_fence = False
     fence = ""
@@ -99,9 +89,11 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
     else:
         body = process_obsidian_images(body, ctx, current_file=ctx.source_path)
     body, headings, _toc = prepare_toc(body, output_mode=ctx.options.output_mode)
+    # Titles are plain text, so extract before math protection replaces TeX
+    # spans with placeholders.
+    title = str(metadata.get("title") or _first_heading_title(body) or ctx.source_path.name)
     body, math_spans = protect_math(body)
     body = expand_code_directives(body, ctx)
-    title = str(metadata.get("title") or _first_heading_title(body) or ctx.source_path.name)
 
     if ctx.options.output_mode == "jekyll":
         content_markdown = restore_math_markdown(body, math_spans)
@@ -110,12 +102,11 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
             title=title,
             metadata=metadata,
             options=ctx.options,
-            stylesheet=_relative_stylesheet_path(ctx.output_path, ctx.options.jekyll_output_root),
         )
         return document, metadata, headings
 
     content_html = render_markdown(body, ctx)
-    content_html = restore_math(content_html, math_spans, ctx.options.math, output_mode=ctx.options.output_mode)
+    content_html = restore_math(content_html, math_spans, ctx.options.math)
 
     document = render_template(
         content=content_html,
@@ -145,13 +136,6 @@ class MarkdownSiteBuilder:
             raise BuildError(f"source does not exist: {source}")
         if output.exists() and self.options.no_overwrite and not self.options.force_rebuild:
             return BuildResult(source=source, output=output, written=False, skipped=True)
-        if output.exists() and not self.options.force_rebuild:
-            try:
-                if output.stat().st_mtime >= source.stat().st_mtime:
-                    # Includes and code outputs can make this conservative, so only skip when explicitly not forcing.
-                    pass
-            except OSError:
-                pass
 
         ctx = BuildContext(source_path=source, output_path=output, options=self.options, dry_run=dry_run)
         ctx.add_dependency(source)
@@ -176,8 +160,11 @@ class MarkdownSiteBuilder:
         return result
 
     def write_jekyll_assets(self, output_root: Path) -> None:
-        output_root.mkdir(parents=True, exist_ok=True)
-        (output_root / JEKYLL_COMPAT_STYLESHEET).write_text(jekyll_compat_css(), encoding="utf-8")
+        if not self.options.jekyll.stylesheet:
+            return
+        stylesheet = output_root / self.options.jekyll.stylesheet
+        stylesheet.parent.mkdir(parents=True, exist_ok=True)
+        stylesheet.write_text(jekyll_compat_css(), encoding="utf-8")
 
     def dry_run_json(self, jobs: list[tuple[Path, Path]]) -> str:
         graph = build_dependency_graph(jobs, self.options)

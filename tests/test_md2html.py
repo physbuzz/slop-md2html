@@ -38,6 +38,23 @@ def test_math_is_protected_from_markdown_emphasis():
     assert "data-tex=\"x_1,x_2\"" in restored
 
 
+def test_stray_double_backticks_do_not_swallow_fences():
+    md = (
+        "The ``implicit'' definition of `integral`:\n"
+        "\n"
+        "```rkt\n"
+        "(define (integral x) x)\n"
+        "```\n"
+        "\n"
+        "More prose with $x_1$ math.\n"
+    )
+    text, spans = protect_math(md)
+    assert "@@MD2HTML_CODE_" not in text
+    assert "(define (integral x) x)" in text
+    restored = restore_math(text, spans, BuildOptions().math)
+    assert "@@MD2HTML_" not in restored
+
+
 def test_toc_compacts_exercises():
     md = """# Title
 
@@ -241,8 +258,7 @@ render_with_liquid: false
     assert "layout: post" in text
     assert "title: Test Note" in text
     assert "render_with_liquid: false" in text
-    assert "md2html_styles:" in text
-    assert "- ../md2html_pygments_compat.css" in text
+    assert "md2html_styles" not in text
     assert "pygments: true" not in text
     assert "## Directory" in text
     assert "- *Exercises:* ([Exercise 2.77](#exercise-277))" in text
@@ -258,8 +274,7 @@ render_with_liquid: false
     assert '<div class="code-output">' in text
     assert '<pre>hello\n</pre>' in text
     assert "```python" not in text
-    assert not (out.parent / "md2html_pygments_compat.css").exists()
-    css = output_root / "md2html_pygments_compat.css"
+    css = output_root / "assets" / "css" / "md2html.css"
     assert css.exists()
     assert ".codehilite" in css.read_text(encoding="utf-8")
     assert (out.parent / "img" / "pic.svg").exists()
