@@ -6,7 +6,16 @@ import sys
 
 from md2html.builder import MarkdownSiteBuilder
 from md2html.code import _default_command
-from md2html.cli import build_jobs, discover_sources, filter_jekyll_sources, make_parser, output_exclusions
+from md2html.cli import (
+    build_jobs,
+    copy_static_files,
+    discover_sources,
+    filter_html_sources,
+    filter_jekyll_sources,
+    make_parser,
+    output_exclusions,
+    static_copy_jobs,
+)
 from md2html.config import BuildOptions
 from md2html.directives import iter_include_paths, iter_src_directives, parse_src_directive
 from md2html.frontmatter import dump_frontmatter, split_frontmatter
@@ -219,6 +228,7 @@ def test_jekyll_output_is_markdown_with_frontmatter_and_directive_expansion(tmp_
     (tmp_path / "code" / "hello.out").write_text("hello\n", encoding="utf-8")
     (tmp_path / "img").mkdir()
     (tmp_path / "img" / "pic.svg").write_text("<svg></svg>", encoding="utf-8")
+    (tmp_path / "img" / "_private.svg").write_text("<svg></svg>", encoding="utf-8")
     source = tmp_path / "note.md"
     source.write_text(
         """---
@@ -278,7 +288,7 @@ render_with_liquid: false
     assert css.exists()
     assert ".codehilite" in css.read_text(encoding="utf-8")
     assert (out.parent / "img" / "pic.svg").exists()
-    assert not (out.parent / "img" / "_private.svg").exists()
+    assert (out.parent / "img" / "_private.svg").exists()
 
 
 def test_jekyll_math_passthrough_keeps_dollar_delimiters(tmp_path: Path):
@@ -333,6 +343,20 @@ def test_jekyll_source_filter_skips_private_paths(tmp_path: Path):
     assert filtered == [site / "index.md"]
 
 
+def test_html_source_filter_skips_private_paths(tmp_path: Path):
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.md").write_text("# Home\n", encoding="utf-8")
+    (site / "_draft.md").write_text("# Draft\n", encoding="utf-8")
+    (site / "notes").mkdir()
+    (site / "notes" / "_scratch.md").write_text("# Scratch\n", encoding="utf-8")
+
+    sources = discover_sources([site], recursive=True)
+    filtered = filter_html_sources(sources, [site], recursive=True)
+
+    assert filtered == [site / "index.md"]
+
+
 def test_src_collapsible_is_expanded_and_plain_src_is_not_collapsible(tmp_path: Path):
     (tmp_path / "code").mkdir()
     (tmp_path / "code" / "plain.py").write_text("print('plain')\n", encoding="utf-8")
@@ -379,6 +403,49 @@ def test_full_site_build_preserves_relative_paths_and_excludes_output_dir(tmp_pa
     assert (output / "index.html").exists()
     assert (output / "chapter" / "page.html").exists()
     assert not (output / "html" / "stale.html").exists()
+
+
+def test_html_static_copy_mirrors_non_sources_and_skips_private_paths(tmp_path: Path):
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.md").write_text("# Home\n", encoding="utf-8")
+    (site / "media").mkdir()
+    (site / "media" / "diagram.svg").write_text("<svg></svg>", encoding="utf-8")
+    (site / "media" / "_draft.svg").write_text("<svg></svg>", encoding="utf-8")
+    (site / "_notes").mkdir()
+    (site / "_notes" / "scratch.txt").write_text("private\n", encoding="utf-8")
+
+    output = site / "html"
+    sources = discover_sources([site], recursive=True, exclude_dirs=[output])
+    jobs = build_jobs(sources, [site], output, recursive=True)
+    ignored_roots, _ignored_files = output_exclusions(output, sources, jobs)
+    copies = static_copy_jobs([site], output, jobs, recursive=True, output_mode="html", exclude_dirs=ignored_roots)
+    copy_static_files(copies)
+
+    assert (output / "media" / "diagram.svg").exists()
+    assert not (output / "media" / "_draft.svg").exists()
+    assert not (output / "_notes" / "scratch.txt").exists()
+    assert not (output / "index.md").exists()
+
+
+def test_jekyll_static_copy_keeps_private_paths_and_unrendered_private_markdown(tmp_path: Path):
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.md").write_text("# Home\n", encoding="utf-8")
+    (site / "_draft.md").write_text("# Draft\n", encoding="utf-8")
+    (site / "media").mkdir()
+    (site / "media" / "_draft.svg").write_text("<svg></svg>", encoding="utf-8")
+
+    output = site / "jekyll"
+    sources = filter_jekyll_sources(discover_sources([site], recursive=True, exclude_dirs=[output]), [site], recursive=True)
+    jobs = build_jobs(sources, [site], output, recursive=True, output_suffix=".md")
+    ignored_roots, _ignored_files = output_exclusions(output, sources, jobs)
+    copies = static_copy_jobs([site], output, jobs, recursive=True, output_mode="jekyll", exclude_dirs=ignored_roots)
+    copy_static_files(copies)
+
+    assert (output / "_draft.md").exists()
+    assert (output / "media" / "_draft.svg").exists()
+    assert not (output / "index.md").exists()
 
 
 def test_watch_exclusions_ignore_output_dir_and_files(tmp_path: Path):

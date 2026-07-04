@@ -63,7 +63,7 @@ class BuildContext:
             self.options.copy_assets
             and source.exists()
             and source.is_file()
-            and not (self.options.output_mode == "jekyll" and has_private_path_part(rel))
+            and not (self.options.output_mode == "html" and has_private_path_part(rel))
         ):
             self.assets.append((source, rel))
         return rel.as_posix()

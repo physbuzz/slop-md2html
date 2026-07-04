@@ -18,6 +18,7 @@ from .paths import dedupe_paths, is_relative_to, resolve_lenient, source_output_
 
 Job = tuple[Path, Path]
 JobProvider = Callable[[], list[Job]]
+StaticCopier = Callable[[list[Job]], None]
 
 _IGNORED_DIR_NAMES = {
     ".git",
@@ -286,6 +287,7 @@ def watch_jobs(
     jobs: list[Job],
     *,
     job_provider: JobProvider | None = None,
+    static_copier: StaticCopier | None = None,
     watch_roots: Iterable[Path] | None = None,
     ignored_roots: Iterable[Path] = (),
     ignored_files: Iterable[Path] = (),
@@ -302,6 +304,8 @@ def watch_jobs(
     current_jobs = job_provider() if job_provider else jobs
     if initial_build:
         _initial_build(builder, current_jobs, verbose=verbose)
+        if static_copier is not None:
+            static_copier(current_jobs)
 
     roots = _prune_nested_roots([*(watch_roots or []), *_watch_roots_from_jobs(builder, current_jobs)])
     base_ignored_roots = list(ignored_roots)
@@ -359,6 +363,8 @@ def watch_jobs(
                 changed = ", ".join(str(path) for path in changed_paths)
                 print(f"changed: {changed}")
             _build_all(builder, jobs_to_build, verbose=verbose)
+            if static_copier is not None:
+                static_copier(current_jobs)
     except KeyboardInterrupt:
         return
     finally:
@@ -370,6 +376,7 @@ def serve_and_watch(
     jobs: list[Job],
     *,
     job_provider: JobProvider | None = None,
+    static_copier: StaticCopier | None = None,
     watch_roots: Iterable[Path] | None = None,
     ignored_roots: Iterable[Path] = (),
     ignored_files: Iterable[Path] = (),
@@ -378,6 +385,8 @@ def serve_and_watch(
 ) -> None:
     current_jobs = job_provider() if job_provider else jobs
     _initial_build(builder, current_jobs, verbose=verbose)
+    if static_copier is not None:
+        static_copier(current_jobs)
 
     output_dirs = {out.parent.resolve() for _src, out in current_jobs}
     serve_dir = sorted(output_dirs, key=lambda p: len(str(p)))[0] if output_dirs else Path.cwd()
@@ -393,6 +402,7 @@ def serve_and_watch(
                 builder,
                 jobs,
                 job_provider=job_provider,
+                static_copier=static_copier,
                 watch_roots=watch_roots,
                 ignored_roots=ignored_roots,
                 ignored_files=ignored_files,

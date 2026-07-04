@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from collections.abc import Iterable
 from pathlib import Path
@@ -117,7 +118,82 @@ def jekyll_output_root(output: Path | None, jobs: list[tuple[Path, Path]]) -> Pa
         return parents[0]
 
 
+def static_output_root(output: Path | None, jobs: list[tuple[Path, Path]]) -> Path | None:
+    if output is None or not jobs:
+        return None
+    output = output.expanduser()
+    if len(jobs) == 1 and output.suffix.lower() in _FILE_SUFFIXES:
+        return None
+    return output
+
+
+def static_copy_jobs(
+    input_roots: list[Path],
+    output: Path | None,
+    jobs: list[tuple[Path, Path]],
+    *,
+    recursive: bool,
+    output_mode: str,
+    exclude_dirs: Iterable[Path] = (),
+) -> list[tuple[Path, Path]]:
+    output_root = static_output_root(output, jobs)
+    if output_root is None:
+        return []
+    rendered_sources = {src.resolve() for src, _out in jobs}
+    excludes = dedupe_paths([output_root, *exclude_dirs])
+    copies: list[tuple[Path, Path]] = []
+
+    for root in input_roots:
+        root = root.expanduser()
+        if not root.is_dir() or is_ignored(root, excludes):
+            continue
+        candidates = root.rglob("*") if recursive else root.glob("*")
+        for src in sorted(candidates):
+            if not src.is_file() or is_ignored(src, excludes):
+                continue
+            resolved = src.resolve()
+            if resolved in rendered_sources:
+                continue
+            copy_root = _root_for(src, input_roots, recursive=recursive)
+            try:
+                rel = resolved.relative_to(copy_root.resolve())
+            except ValueError:
+                rel = Path(src.name)
+            if output_mode == "html" and has_private_path_part(rel):
+                continue
+            dest = output_root / rel
+            if resolved != dest.resolve():
+                copies.append((src, dest))
+    return copies
+
+
+def copy_static_files(
+    copies: list[tuple[Path, Path]],
+    *,
+    no_overwrite: bool = False,
+    force_rebuild: bool = False,
+) -> None:
+    for src, dest in copies:
+        if no_overwrite and dest.exists() and not force_rebuild:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+
+
 def filter_jekyll_sources(sources: list[Path], input_roots: list[Path], *, recursive: bool) -> list[Path]:
+    out: list[Path] = []
+    for src in sources:
+        root = _root_for(src, input_roots, recursive=recursive)
+        try:
+            rel = src.resolve().relative_to(root.resolve())
+        except ValueError:
+            rel = Path(src.name)
+        if not has_private_path_part(rel):
+            out.append(src)
+    return out
+
+
+def filter_html_sources(sources: list[Path], input_roots: list[Path], *, recursive: bool) -> list[Path]:
     out: list[Path] = []
     for src in sources:
         root = _root_for(src, input_roots, recursive=recursive)
@@ -216,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
             current_sources = discover_sources(input_roots, recursive=recursive, exclude_dirs=exclude_dirs)
             if options.output_mode == "jekyll":
                 current_sources = filter_jekyll_sources(current_sources, input_roots, recursive=recursive)
+            else:
+                current_sources = filter_html_sources(current_sources, input_roots, recursive=recursive)
             current_jobs = build_jobs(current_sources, input_roots, output, recursive=recursive, output_suffix=output_suffix)
             return current_sources, current_jobs
 
@@ -232,6 +310,23 @@ def main(argv: list[str] | None = None) -> int:
         def make_jobs() -> list[tuple[Path, Path]]:
             return plan_jobs()[0]
 
+        def copy_static_for(current_jobs: list[tuple[Path, Path]]) -> None:
+            if not options.copy_assets:
+                return
+            static_copies = static_copy_jobs(
+                input_roots,
+                output,
+                current_jobs,
+                recursive=recursive,
+                output_mode=options.output_mode,
+                exclude_dirs=ignored_roots,
+            )
+            copy_static_files(
+                static_copies,
+                no_overwrite=options.no_overwrite,
+                force_rebuild=options.force_rebuild,
+            )
+
         jobs, ignored_roots, ignored_files = plan_jobs()
         if options.output_mode == "jekyll":
             options.jekyll_output_root = jekyll_output_root(output, jobs)
@@ -246,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
                 builder,
                 jobs,
                 job_provider=make_jobs,
+                static_copier=copy_static_for if options.copy_assets else None,
                 watch_roots=watch_roots_from_inputs(input_roots),
                 ignored_roots=ignored_roots,
                 ignored_files=ignored_files,
@@ -265,6 +361,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{action}: {src} -> {out}")
         if options.output_mode == "jekyll" and options.jekyll_output_root is not None and failures == 0:
             builder.write_jekyll_assets(options.jekyll_output_root)
+        if failures == 0 and options.copy_assets:
+            copy_static_for(jobs)
         return 1 if failures else 0
     except (Md2HtmlError, OSError, FileNotFoundError, RuntimeError) as exc:
         print(f"md2html: error: {exc}", file=sys.stderr)
