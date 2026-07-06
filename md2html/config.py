@@ -49,6 +49,8 @@ class BuildOptions:
     project_root: Path = field(default_factory=lambda: Path.cwd())
     template_dirs: list[Path] = field(default_factory=list)
     template: str = "page.html"
+    css: list[str] | None = None
+    stylesheets: list[str] = field(default_factory=list)
     output_mode: str = "html"  # html or jekyll
     math: MathConfig = field(default_factory=MathConfig)
     jekyll: JekyllConfig = field(default_factory=JekyllConfig)
@@ -84,6 +86,14 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (str, Path)):
+        return [str(value)]
+    return [str(item) for item in value]
+
+
 def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> BuildOptions:
     cwd = cwd or Path.cwd()
     project_root = Path(data.get("project_root", data.get("root", cwd))).expanduser()
@@ -104,6 +114,8 @@ def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> Bu
         project_root=project_root,
         template_dirs=template_dirs,
         template=data.get("template", "page.html"),
+        css=_string_list(data["css"]) if data.get("css") is not None else None,
+        stylesheets=_string_list(data.get("stylesheets", [])),
         output_mode=data.get("output_mode", data.get("format", "html")),
         math=MathConfig(
             backend=math_data.get("backend", data.get("math_backend", "mathjax")),

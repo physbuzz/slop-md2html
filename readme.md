@@ -103,6 +103,38 @@ md2html --example-layout
 
 The generated layout is for md2html HTML output. For Jekyll output, use the `jekyll` config section to set front matter defaults such as `layout`, and customize your Jekyll site's layouts normally.
 
+## HTML Templates
+
+Bundled HTML templates live in `md2html/default_templates/` and are selected with the `template` config key or a page-level `template` front matter key:
+
+- `super-barebones.html`: A near-plain HTML document. Its paired CSS only covers md2html-generated features such as code boxes, `@toc`, warnings, math overflow, and images.
+- `barebones.html`: The simple page template with the original centered white reading panel and no reader controls.
+- `page.html`: The default template. It includes an `Aa` reader control in the top right for theme, measure, and typeface preferences.
+
+Each bundled template has its own bundled CSS file:
+
+```text
+super-barebones.html  ->  super-barebones.css
+barebones.html        ->  barebones.css
+page.html             ->  page.css
+```
+
+When `embed_assets` is true, `embedded_css` contains syntax-highlighting CSS plus the CSS selected for the active template. For a custom template, md2html looks for a same-name companion CSS file in `template_dirs`; for example, `templates/report.html` automatically embeds `templates/report.css` when it exists.
+
+Override embedded CSS from config:
+
+```json
+{
+  "template": "report.html",
+  "template_dirs": ["templates"],
+  "css": ["templates/report.css"]
+}
+```
+
+Use `"css": null` or omit the key to use the selected template's default CSS. Use `"css": []` to embed only syntax-highlighting CSS. When `embed_assets` is false, `stylesheets` are emitted as `<link>` tags instead.
+
+The default `page.html` template works with JavaScript disabled: it follows the system color scheme, uses normal width and sans-serif text by default, and still renders the page content and code blocks. In browsers with CSS `:has(...)` support, the visible radio controls can change theme, width, and typeface without JavaScript. The small script only persists settings and asks MathJax to re-typeset after a reader setting changes.
+
 ## Configuration
 
 A single config file can drive both HTML output and Jekyll Markdown output. Put shared settings at the top level, put Jekyll-only settings under `jekyll`, and use `--format` plus `-o/--output` when you want a different output mode or destination for a particular run:
@@ -141,7 +173,7 @@ For a fuller starting point that includes every major section, run:
 md2html --example-config
 ```
 
-To customize the default HTML layout and CSS, run:
+To customize the default HTML layout and CSS as one file, run:
 
 ```bash
 md2html --example-layout
@@ -158,6 +190,8 @@ Canonical top-level keys:
 - `output_mode`: `"html"` or `"jekyll"`. Alias: `format`. The CLI `--format` option overrides this.
 - `template_dirs`: Additional template directories. Alias: `templates`.
 - `template`: HTML template name for HTML output. Defaults to `page.html`.
+- `css`: Local CSS file or list of files to embed when `embed_assets` is true. `null` uses the selected template's default CSS.
+- `stylesheets`: Stylesheet links emitted when `embed_assets` is false.
 - `execute`: Run source files for `@src(...)` when their output files are missing or stale.
 - `embed_assets`: Embed bundled CSS in HTML output. Alias: `embed_styles`.
 - `copy_assets`: Copy referenced local assets next to generated pages.

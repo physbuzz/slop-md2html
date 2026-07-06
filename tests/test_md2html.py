@@ -433,6 +433,8 @@ def test_config_aliases_and_defaults_are_sensible(tmp_path: Path):
             "root": "notes",
             "templates": ["templates"],
             "format": "jekyll",
+            "css": ["styles/article.css"],
+            "stylesheets": ["print.css"],
             "math_backend": "mathjax",
             "timeout": 6,
             "embed_styles": False,
@@ -454,6 +456,8 @@ def test_config_aliases_and_defaults_are_sensible(tmp_path: Path):
 
     assert options.project_root == (tmp_path / "notes").resolve()
     assert options.template_dirs == [options.project_root / "templates"]
+    assert options.css == ["styles/article.css"]
+    assert options.stylesheets == ["print.css"]
     assert options.output_mode == "jekyll"
     assert options.math.backend == "mathjax"
     assert options.code.timeout == 6
@@ -929,6 +933,7 @@ def test_example_config_command_writes_default_file(monkeypatch, capsys, tmp_pat
     assert data["output"] == "html"
     assert data["template_dirs"] == ["templates"]
     assert data["template"] == "page.html"
+    assert data["css"] is None
     assert data["math"] == {"backend": "mathjax"}
     assert data["code"]["commands"]["wl"] == "wolframscript -file {src}"
     assert data["jekyll"]["frontmatter"] == {"render_with_liquid": False}
@@ -984,7 +989,9 @@ def test_example_layout_command_writes_inline_css_layout(monkeypatch, capsys, tm
     assert exit_code == 0
     assert captured.out == "wrote: templates/page.html\n"
     assert captured.err == ""
-    assert '<style>\n/* Default md2html stylesheet. Edit this block freely. */' in layout
+    assert '<style>\n/* Default md2html page stylesheet. Edit this block freely. */' in layout
+    assert "--reader-paper" in layout
+    assert "reader-widget" in layout
     assert ".codehilite" in layout
     assert ".table-of-contents" in layout
     assert "{{ content | safe }}" in layout
@@ -1200,16 +1207,117 @@ def test_execute_uses_fresh_out_file_without_rerunning(tmp_path: Path):
 def test_resource_lookup_finds_packaged_assets():
     from md2html.resources import package_resource_path
 
-    assert package_resource_path("assets/base.css").exists()
+    for css_name in ("super-barebones.css", "barebones.css", "page.css"):
+        assert package_resource_path(f"assets/{css_name}").exists()
+    for template_name in ("super-barebones.html", "barebones.html", "page.html"):
+        assert package_resource_path(f"default_templates/{template_name}").exists()
+
+
+def test_bundled_template_styles_are_distinct():
+    from md2html.rendering import asset_css
+
+    super_barebones = asset_css("super-barebones.css")
+    barebones = asset_css("barebones.css")
+    page = asset_css("page.css")
+
+    assert "body {" not in super_barebones
+    assert ".code-box" in super_barebones
+    assert "box-shadow" in barebones
+    assert "reader-widget" not in barebones
+    assert "reader-widget" in page
+    assert "prefers-color-scheme: dark" in page
+
+
+def test_page_template_renders_reader_widget_without_duplicate_title(tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text("# Reader Page\n\nBody.\n", encoding="utf-8")
+    out = tmp_path / "reader.html"
+    options = BuildOptions(project_root=tmp_path, template="page.html")
+
+    MarkdownSiteBuilder(options).build_file(source, out)
+
+    html = out.read_text(encoding="utf-8")
+    assert '<details class="reader-widget">' in html
+    assert ">Aa</summary>" in html
+    assert 'id="theme-dark"' in html
+    assert "prefers-color-scheme: dark" in html
+    assert 'class="page-title"' not in html
+    assert '<h1 id="reader-page">Reader Page</h1>' in html
+
+
+def test_bundled_templates_are_documented():
+    text = (Path(__file__).resolve().parents[1] / "readme.md").read_text(encoding="utf-8")
+
+    for template_name in ("super-barebones.html", "barebones.html", "page.html"):
+        assert f"`{template_name}`" in text
 
 
 def test_generated_styles_keep_toc_compact():
-    from md2html.rendering import base_css, jekyll_compat_css
+    from md2html.rendering import asset_css, jekyll_compat_css
 
-    for css in (base_css(), jekyll_compat_css()):
+    for css in (asset_css("super-barebones.css"), asset_css("barebones.css"), asset_css("page.css"), jekyll_compat_css()):
         assert ".table-of-contents { margin: 0 0 .8rem; padding: 0; font-size: .9rem; line-height: 1.2; }" in css
         assert ".toc-list, .toc-list ul { margin: 0; padding-left: 1rem; }" in css
         assert ".toc-list li { margin-bottom: 2px; }" in css
+
+
+def test_custom_template_embeds_companion_css(tmp_path: Path):
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "article.html").write_text(
+        """<!DOCTYPE html>
+<html>
+<head>{% if embedded_css %}<style>
+{{ embedded_css | safe }}
+</style>{% endif %}</head>
+<body>{{ content | safe }}</body>
+</html>
+""",
+        encoding="utf-8",
+    )
+    (templates / "article.css").write_text(".custom-template { color: red; }\n", encoding="utf-8")
+    source = tmp_path / "note.md"
+    source.write_text("---\ntemplate: article.html\n---\n\n# Custom\n", encoding="utf-8")
+    out = tmp_path / "note.html"
+    options = BuildOptions(project_root=tmp_path, template_dirs=[templates])
+
+    MarkdownSiteBuilder(options).build_file(source, out)
+
+    html = out.read_text(encoding="utf-8")
+    assert ".custom-template { color: red; }" in html
+    assert '<h1 id="custom">Custom</h1>' in html
+
+
+def test_configured_css_overrides_template_default(tmp_path: Path):
+    css = tmp_path / "custom.css"
+    css.write_text(".only-custom-css { color: green; }\n", encoding="utf-8")
+    source = tmp_path / "note.md"
+    source.write_text("# Custom CSS\n", encoding="utf-8")
+    out = tmp_path / "note.html"
+    options = BuildOptions(project_root=tmp_path, template="barebones.html", css=["custom.css"])
+
+    MarkdownSiteBuilder(options).build_file(source, out)
+
+    html = out.read_text(encoding="utf-8")
+    assert ".only-custom-css { color: green; }" in html
+    assert "box-shadow" not in html
+
+
+def test_css_null_uses_template_default_and_empty_list_disables_it(tmp_path: Path):
+    source_default = tmp_path / "default.md"
+    source_default.write_text("---\ncss: null\n---\n\n# Default CSS\n", encoding="utf-8")
+    source_empty = tmp_path / "empty.md"
+    source_empty.write_text("---\ncss: []\n---\n\n# Empty CSS\n", encoding="utf-8")
+    default_out = tmp_path / "default.html"
+    empty_out = tmp_path / "empty.html"
+    options = BuildOptions(project_root=tmp_path, template="barebones.html")
+
+    builder = MarkdownSiteBuilder(options)
+    builder.build_file(source_default, default_out)
+    builder.build_file(source_empty, empty_out)
+
+    assert "box-shadow" in default_out.read_text(encoding="utf-8")
+    assert "box-shadow" not in empty_out.read_text(encoding="utf-8")
 
 
 def test_src_inside_include_resolves_relative_to_included_file(tmp_path: Path):

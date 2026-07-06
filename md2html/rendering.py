@@ -33,6 +33,11 @@ _FENCE_START_RE = re.compile(r"^(?P<indent>[ \t]{0,3})(?P<fence>`{3,}|~{3,})(?P<
 _ESCAPED_DOLLAR_RE = re.compile(r"(?<!\\)\\\$")
 _ASSETS_DIR = package_resource_path("assets")
 _DEFAULT_TEMPLATE_DIR = package_resource_path("default_templates")
+_TEMPLATE_CSS = {
+    "super-barebones.html": "super-barebones.css",
+    "barebones.html": "barebones.css",
+    "page.html": "page.css",
+}
 
 _SUFFIX_LANG = {
     ".py": "python",
@@ -591,8 +596,66 @@ def render_markdown(markdown_text: str, ctx: BuildContext | None = None) -> str:
     return markdown(markdown_text)
 
 
-def base_css() -> str:
-    return (_ASSETS_DIR / "base.css").read_text(encoding="utf-8")
+def bundled_template_text(template_name: str) -> str:
+    return (_DEFAULT_TEMPLATE_DIR / template_name).read_text(encoding="utf-8")
+
+
+def asset_css(name: str) -> str:
+    return (_ASSETS_DIR / name).read_text(encoding="utf-8")
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (str, Path)):
+        return [value]
+    return list(value)
+
+
+def _companion_css_path(template_name: str, options: BuildOptions) -> Path | None:
+    css_name = Path(template_name).with_suffix(".css")
+    for directory in options.template_dirs:
+        candidate = directory / css_name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _default_css_refs(template_name: str, options: BuildOptions) -> list[str | Path]:
+    companion = _companion_css_path(template_name, options)
+    if companion is not None:
+        return [companion]
+    bundled = _TEMPLATE_CSS.get(Path(template_name).name)
+    if bundled:
+        return [bundled]
+    return ["super-barebones.css"]
+
+
+def _configured_css_refs(metadata: dict[str, Any], options: BuildOptions, template_name: str) -> list[str | Path]:
+    if metadata.get("css") is not None:
+        return _as_list(metadata["css"])
+    if options.css is not None:
+        return list(options.css)
+    return _default_css_refs(template_name, options)
+
+
+def _read_css_ref(ref: str | Path, options: BuildOptions) -> str:
+    path = Path(ref).expanduser()
+    if path.is_absolute():
+        candidates = [path]
+    else:
+        candidates = [options.project_root / path, *[directory / path for directory in options.template_dirs], _ASSETS_DIR / path]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.read_text(encoding="utf-8")
+    raise FileNotFoundError(f"CSS file does not exist: {ref}")
+
+
+def embedded_css_for_template(template_name: str, options: BuildOptions, metadata: dict[str, Any] | None = None) -> str:
+    metadata = metadata or {}
+    parts = [pygments_css()]
+    parts.extend(_read_css_ref(ref, options) for ref in _configured_css_refs(metadata, options, template_name))
+    return "\n\n".join(part.rstrip() for part in parts if part.strip()) + "\n"
 
 
 def make_environment(options: BuildOptions) -> Environment:
@@ -617,11 +680,9 @@ def render_template(
     name = template_name or options.template
     template = env.get_template(name)
     css = ""
-    stylesheets: list[str] = []
+    stylesheets = [*options.stylesheets, *_as_list(metadata.get("stylesheets"))]
     if options.embed_assets:
-        css = pygments_css() + "\n\n" + base_css()
-    else:
-        stylesheets = metadata.get("stylesheets", []) or []
+        css = embedded_css_for_template(name, options, metadata)
     return template.render(
         content=content,
         title=title,
