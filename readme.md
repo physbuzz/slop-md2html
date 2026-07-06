@@ -71,6 +71,7 @@ watch.py        rebuild loop and development server
 ```bash
 md2html note.md
 md2html note.md -o index.html
+md2html --override-template barebones.html note.md -o note-barebones.html
 md2html file1.md file2.md -o html/
 md2html -r src -o html
 md2html -r . -o _site --serve
@@ -105,7 +106,7 @@ The generated layout is for md2html HTML output. For Jekyll output, use the `jek
 
 ## HTML Templates
 
-Bundled HTML templates live in `md2html/default_templates/` and are selected with the `template` config key or a page-level `template` front matter key:
+Bundled HTML templates live in `md2html/default_templates/` and are selected with `--override-template`, the `template` config key, or a page-level `template` front matter key:
 
 - `super-barebones.html`: A near-plain HTML document. It has no page-level bundled CSS; md2html-generated feature CSS is still added when the page uses a styled feature.
 - `barebones.html`: The simple page template with the original centered white reading panel and no reader controls.
@@ -121,7 +122,7 @@ page.html             ->  page.css
 
 When `embed_assets` is true, `embedded_css` contains the selected template CSS plus automatic CSS for only the md2html features used by that page. Plain pages using `super-barebones.html` get no bundled CSS and no empty `<style>` block. Pages without math do not load MathJax. The bundled reading templates keep display math horizontally scrollable, wrap long links when needed, and constrain common embedded media on narrow screens.
 
-For a custom template, md2html looks for a same-name companion CSS file in `template_dirs`; for example, `templates/report.html` automatically embeds `templates/report.css` when it exists.
+Template directories are searched before the bundled template directory, so `--templates templates` lets `templates/page.html` override the bundled `page.html`. For a custom template, md2html looks for a same-name companion CSS file in `template_dirs`; for example, `templates/report.html` automatically embeds `templates/report.css` when it exists.
 
 Override template CSS from config:
 
@@ -220,7 +221,7 @@ Canonical top-level keys:
 - `project_root`: Base directory for includes, source embeds, assets, and relative template directories.
 - `output_mode`: `"html"` or `"jekyll"`. The CLI `--format` option overrides this.
 - `template_dirs`: Additional template directories.
-- `template`: HTML template name for HTML output. Defaults to `page.html`.
+- `template`: HTML template name for HTML output. Defaults to `page.html`. The CLI `--override-template` option overrides this for a single run.
 - `css`: Local CSS file or list of files to embed when `embed_assets` is true. `null` uses the selected template's default CSS.
 - `feature_css`: Include automatic CSS for md2html-generated features used by the page. Defaults to `true`.
 - `stylesheets`: Stylesheet links emitted when `embed_assets` is false.

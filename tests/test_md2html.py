@@ -509,6 +509,46 @@ def test_cli_explicit_config_resolves_paths_relative_to_config_file(monkeypatch,
     assert not (tmp_path / "site" / "index.html").exists()
 
 
+def test_cli_override_template_option_selects_html_template(monkeypatch, tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text("# Note\n\nBody\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["--override-template", "super-barebones.html", "note.md", "-o", "plain.html"]) == 0
+
+    html = (tmp_path / "plain.html").read_text(encoding="utf-8")
+    assert "reader-widget" not in html
+    assert '<main class="container">' not in html
+    assert '<h1 id="note">Note</h1>' in html
+
+
+def test_cli_templates_directory_precedes_bundled_templates(monkeypatch, tmp_path: Path):
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "page.html").write_text(
+        '<!DOCTYPE html><html><body class="local-page">{{ content | safe }}</body></html>',
+        encoding="utf-8",
+    )
+    (tmp_path / "note.md").write_text("# Note\n\nBody\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["--templates", "templates", "note.md", "-o", "out.html"]) == 0
+
+    html = (tmp_path / "out.html").read_text(encoding="utf-8")
+    assert 'class="local-page"' in html
+    assert "reader-widget" not in html
+
+
+def test_cli_default_output_reports_current_directory(monkeypatch, capsys, tmp_path: Path):
+    (tmp_path / "note.md").write_text("# Note\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["note.md"]) == 0
+
+    captured = capsys.readouterr()
+    assert "Destination: .\n" in captured.out
+
+
 def test_cli_missing_explicit_config_does_not_use_default_config(monkeypatch, capsys, tmp_path: Path):
     (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
     (tmp_path / "md2html.json").write_text(
@@ -911,6 +951,11 @@ def test_help_describes_scaffold_commands():
     actions = {option: action for action in make_parser()._actions for option in action.option_strings}
     assert actions["--example-config"].help == "Write an example config file and exit (default: md2html.json; use - for stdout)"
     assert actions["--example-layout"].help == "Write an example layout with inline page and feature CSS and exit (default: templates/page.html; use - for stdout)"
+
+
+def test_help_describes_override_template_option():
+    actions = {option: action for action in make_parser()._actions for option in action.option_strings}
+    assert actions["--override-template"].help == "Override the HTML template name for this run"
 
 
 def test_readme_command_prints_full_readme_from_any_directory(monkeypatch, capsys, tmp_path: Path):

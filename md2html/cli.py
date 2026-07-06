@@ -66,7 +66,7 @@ def _output_label(output: Path | None, jobs: list[tuple[Path, Path]]) -> str:
         return str(Path.cwd())
     parents = [out.parent for _src, out in jobs]
     try:
-        return os.path.commonpath([str(parent) for parent in parents])
+        return os.path.commonpath([str(parent) for parent in parents]) or "."
     except ValueError:
         return str(parents[0])
 
@@ -298,6 +298,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("-f", "--force-rebuild", action="store_true", help="Force rebuild even if outputs exist")
     parser.add_argument("--dry-run", action="store_true", help="Print build DAG as JSON without writing files")
     parser.add_argument("--templates", type=Path, help="Templates directory")
+    parser.add_argument("--override-template", help="Override the HTML template name for this run")
     parser.add_argument("--config", type=Path, help="Configuration file (default: ./md2html.json when present)")
     parser.add_argument("--format", choices=["html", "jekyll"], dest="output_mode", help="Output mode")
     parser.add_argument("--strict", action="store_true", help="Treat missing includes/sources as errors")
@@ -370,6 +371,8 @@ def main(argv: list[str] | None = None) -> int:
         overrides["strict"] = True
     if args.templates:
         overrides["template_dirs"] = [str(args.templates)]
+    if args.override_template:
+        overrides["template"] = args.override_template
     if args.output_mode:
         overrides["output_mode"] = args.output_mode
 
