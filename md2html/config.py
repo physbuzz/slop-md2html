@@ -10,7 +10,7 @@ import yaml
 
 @dataclass
 class MathConfig:
-    backend: str = "mathjax"  # future extension point: mathml, svg
+    backend: str = "mathjax"
 
 
 @dataclass
@@ -24,8 +24,8 @@ class JekyllConfig:
     layout: str | None = "post"
     # Path of the generated stylesheet relative to the output root; None skips it.
     stylesheet: str | None = "assets/css/md2html.css"
-    # Convert Markdown fenced code blocks to Pygments HTML before Jekyll sees
-    # them, matching md2html's HTML output and @src embeds.
+    # Convert Markdown fenced code blocks to highlighted HTML before Jekyll
+    # processes them, matching md2html's HTML output and @src embeds.
     highlight_fences: bool = False
     # Extra frontmatter merged into every page; page frontmatter wins.
     frontmatter: dict[str, Any] = field(default_factory=dict)

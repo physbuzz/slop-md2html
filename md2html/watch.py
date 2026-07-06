@@ -295,7 +295,7 @@ def watch_jobs(
     debounce: float = 0.25,
     initial_build: bool = True,
 ) -> None:
-    """Watch source trees with watchdog and rebuild affected pages.
+    """Watch source trees and rebuild affected pages.
 
     The dependency model is intentionally small: Markdown include edges and
     article-level source/output edges. It is not a general language build DAG.

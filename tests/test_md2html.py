@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import errno
 import sys
 
-from md2html.builder import MarkdownSiteBuilder
+from md2html.builder import MarkdownSiteBuilder, load_options
 from md2html.code import _default_command
 from md2html.cli import (
     build_jobs,
@@ -12,11 +13,12 @@ from md2html.cli import (
     discover_sources,
     filter_html_sources,
     filter_jekyll_sources,
+    main,
     make_parser,
     output_exclusions,
     static_copy_jobs,
 )
-from md2html.config import BuildOptions
+from md2html.config import BuildOptions, options_from_mapping
 from md2html.directives import iter_include_paths, iter_src_directives, parse_src_directive
 from md2html.frontmatter import dump_frontmatter, split_frontmatter
 from md2html.paths import source_output_path
@@ -389,6 +391,136 @@ def test_jekyll_cli_jobs_use_markdown_suffix(tmp_path: Path):
     jobs = build_jobs([page], [site], site / "jekyll", recursive=True, output_suffix=".md")
 
     assert jobs == [(page, site / "jekyll" / "index.md")]
+
+
+def test_config_aliases_and_defaults_are_sensible(tmp_path: Path):
+    options = options_from_mapping(
+        {
+            "root": "notes",
+            "templates": ["templates"],
+            "format": "jekyll",
+            "math_backend": "mathjax",
+            "timeout": 6,
+            "embed_styles": False,
+            "obsidian_images": {"class_name": "figure", "width": "75%"},
+            "code": {
+                "commands": {"py": "python {src}"},
+                "output_suffix": ".run",
+            },
+            "jekyll": {
+                "math": "html",
+                "layout": None,
+                "stylesheet": None,
+                "highlight_fences": True,
+                "frontmatter": {"render_with_liquid": False},
+            },
+        },
+        cwd=tmp_path,
+    )
+
+    assert options.project_root == (tmp_path / "notes").resolve()
+    assert options.template_dirs == [options.project_root / "templates"]
+    assert options.output_mode == "jekyll"
+    assert options.math.backend == "mathjax"
+    assert options.code.timeout == 6
+    assert options.code.output_suffix == ".run"
+    assert options.embed_assets is False
+    assert options.images.class_name == "figure"
+    assert options.images.width == "75%"
+    assert options.jekyll.math == "html"
+    assert options.jekyll.layout is None
+    assert options.jekyll.stylesheet is None
+    assert options.jekyll.highlight_fences is True
+    assert options.jekyll.frontmatter == {"render_with_liquid": False}
+
+
+def test_load_options_uses_config_directory_as_default_project_root(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    config = project / "md2html.json"
+    config.write_text("{}", encoding="utf-8")
+
+    options = load_options(tmp_path, config)
+
+    assert options.project_root == project.resolve()
+    assert options.config_file == config
+
+
+def test_cli_explicit_config_resolves_paths_relative_to_config_file(monkeypatch, tmp_path: Path):
+    project = tmp_path / "project"
+    src = project / "src"
+    src.mkdir(parents=True)
+    (src / "index.md").write_text("# Home\n", encoding="utf-8")
+    config = project / "md2html.json"
+    config.write_text(
+        json.dumps({"input": "src", "output": "site", "recursive": True, "copy_assets": False}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["--config", str(config)]) == 0
+
+    assert (project / "site" / "index.html").exists()
+    assert not (tmp_path / "site" / "index.html").exists()
+
+
+def test_cli_missing_explicit_config_does_not_use_default_config(monkeypatch, capsys, tmp_path: Path):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / "md2html.json").write_text(
+        json.dumps({"input": "index.md", "output": "site", "copy_assets": False}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--config", "missing.json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "configuration file does not exist" in captured.err
+    assert not (tmp_path / "site" / "index.html").exists()
+
+
+def test_cli_default_input_uses_config_project_root(monkeypatch, tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "index.md").write_text("# Home\n", encoding="utf-8")
+    config = project / "md2html.json"
+    config.write_text(json.dumps({"output": "site", "recursive": True, "copy_assets": False}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["--config", str(config)]) == 0
+
+    assert (project / "site" / "index.html").exists()
+    assert not (tmp_path / "site" / "index.html").exists()
+
+
+def test_one_config_can_drive_html_and_jekyll_with_cli_overrides(monkeypatch, tmp_path: Path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "index.md").write_text("# Home\n\n@toc\n\n## Section\n", encoding="utf-8")
+    (tmp_path / "md2html.json").write_text(
+        json.dumps(
+            {
+                "input": "src",
+                "output": "html",
+                "recursive": True,
+                "copy_assets": False,
+                "jekyll": {"layout": "post", "stylesheet": None},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["--config", "md2html.json"]) == 0
+    assert main(["--config", "md2html.json", "--format", "jekyll", "-o", "jekyll"]) == 0
+
+    assert (tmp_path / "html" / "index.html").exists()
+    jekyll_page = tmp_path / "jekyll" / "index.md"
+    assert jekyll_page.exists()
+    text = jekyll_page.read_text(encoding="utf-8")
+    assert "layout: post" in text
+    assert "## Directory" in text
 
 
 def test_jekyll_source_filter_skips_private_paths(tmp_path: Path):

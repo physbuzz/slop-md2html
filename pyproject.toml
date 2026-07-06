@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "md2html"
 version = "0.1.2"
 description = "Markdown page builder with math shielding, @toc, @include, Obsidian images, and executable code embeds."
-readme = "README.md"
+readme = "readme.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "md2html contributors" }]

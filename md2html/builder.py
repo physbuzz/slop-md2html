@@ -184,10 +184,12 @@ class MarkdownSiteBuilder:
 def load_options(cwd: Path, config_path: Path | None = None, overrides: dict[str, Any] | None = None) -> BuildOptions:
     data: dict[str, Any] = {}
     path = config_path or (cwd / "md2html.json")
+    options_cwd = cwd
     if path.exists():
         data = load_config_file(path)
+        options_cwd = path.parent
     if overrides:
         data = deep_merge(data, overrides)
-    options = options_from_mapping(data, cwd=cwd)
+    options = options_from_mapping(data, cwd=options_cwd)
     options.config_file = path if path.exists() else None
     return options

@@ -26,6 +26,20 @@ def _path_list(value) -> list[Path]:
     return [Path(v) for v in value]
 
 
+def _resolve_config_path(path: Path, base_dir: Path) -> Path:
+    path = path.expanduser()
+    if path.is_absolute():
+        return path
+    return base_dir / path
+
+
+def _normalize_config_path(path: Path, cwd: Path) -> Path:
+    path = path.expanduser()
+    if not path.is_absolute():
+        path = cwd / path
+    return path.resolve(strict=False)
+
+
 def _explicit_output_dir(output: Path | None) -> Path | None:
     if output is None:
         return None
@@ -224,7 +238,10 @@ def _config_inputs(config_path: Path) -> tuple[list[Path], Path | None, bool]:
     raw_inputs = data.get("files", data.get("inputs", data.get("input", [])))
     raw_output = data.get("output")
     recursive = bool(data.get("recursive", False))
-    return _path_list(raw_inputs), Path(raw_output) if raw_output else None, recursive
+    base_dir = config_path.parent
+    inputs = [_resolve_config_path(path, base_dir) for path in _path_list(raw_inputs)]
+    output = _resolve_config_path(Path(raw_output), base_dir) if raw_output else None
+    return inputs, output, recursive
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -251,12 +268,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = make_parser()
     args = parser.parse_args(argv)
     cwd = Path.cwd()
-    config_path = args.config or (cwd / "md2html.json")
+    config_path = _normalize_config_path(args.config or (cwd / "md2html.json"), cwd)
+    if args.config and not config_path.exists():
+        print(f"md2html: error: configuration file does not exist: {config_path}", file=sys.stderr)
+        return 2
     config_inputs, config_output, config_recursive = _config_inputs(config_path)
 
     input_roots = [Path(p) for p in args.files] if args.files else config_inputs
-    if not input_roots:
-        input_roots = [cwd]
+    using_default_input = not input_roots
+    if using_default_input and not config_path.exists():
         config_recursive = False
     recursive = args.recursive or config_recursive
     output = args.output or config_output
@@ -279,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         options = load_options(cwd, config_path if config_path.exists() else None, overrides)
+        if using_default_input:
+            input_roots = [options.project_root]
         builder = MarkdownSiteBuilder(options)
 
         pre_excludes = []
