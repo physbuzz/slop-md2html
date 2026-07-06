@@ -111,6 +111,7 @@ Site-specific behavior comes from the `jekyll` config section rather than code:
     "math": "passthrough",
     "layout": "post",
     "stylesheet": "assets/css/md2html.css",
+    "highlight_fences": false,
     "frontmatter": {
       "render_with_liquid": false
     }
@@ -121,6 +122,7 @@ Site-specific behavior comes from the `jekyll` config section rather than code:
 - `math`: how math reaches the output Markdown. `"passthrough"` (default) emits `$...$` and `$$...$$` verbatim; `"html"` emits the same `<span class="math" data-tex="...">` wrappers as HTML output mode, which kramdown passes through untouched.
 - `layout`: default layout name; `null` leaves the key out entirely.
 - `stylesheet`: where to write the generated CSS, relative to the output root; `null` skips writing it.
+- `highlight_fences`: when `true`, Markdown fenced code blocks are converted to the same Pygments-backed `<div class="codehilite">` HTML used by normal HTML output and `@src(...)` embeds before Jekyll processes the page.
 - `frontmatter`: defaults merged into every page's front matter; per-page front matter wins.
 
 ### Math and kramdown

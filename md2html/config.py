@@ -24,6 +24,9 @@ class JekyllConfig:
     layout: str | None = "post"
     # Path of the generated stylesheet relative to the output root; None skips it.
     stylesheet: str | None = "assets/css/md2html.css"
+    # Convert Markdown fenced code blocks to Pygments HTML before Jekyll sees
+    # them, matching md2html's HTML output and @src embeds.
+    highlight_fences: bool = False
     # Extra frontmatter merged into every page; page frontmatter wins.
     frontmatter: dict[str, Any] = field(default_factory=dict)
 
@@ -109,6 +112,7 @@ def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> Bu
             math=jekyll_data.get("math", "passthrough"),
             layout=jekyll_data.get("layout", "post"),
             stylesheet=jekyll_data.get("stylesheet", "assets/css/md2html.css"),
+            highlight_fences=bool(jekyll_data.get("highlight_fences", False)),
             frontmatter=dict(jekyll_data.get("frontmatter", {}) or {}),
         ),
         code=CodeConfig(

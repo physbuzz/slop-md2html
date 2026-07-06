@@ -19,8 +19,10 @@ from .rendering import (
     prepare_toc,
     process_obsidian_images_markdown,
     process_obsidian_images,
+    preserve_escaped_dollars_markdown,
     protect_math,
     queue_html_image_assets,
+    render_fenced_code_blocks,
     render_jekyll_markdown,
     render_markdown,
     render_template,
@@ -93,6 +95,8 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
     # spans with placeholders.
     title = str(metadata.get("title") or _first_heading_title(body) or ctx.source_path.name)
     body, math_spans = protect_math(body)
+    if ctx.options.output_mode == "jekyll":
+        body = preserve_escaped_dollars_markdown(body)
     body = expand_code_directives(body, ctx)
 
     if ctx.options.output_mode == "jekyll":
@@ -100,6 +104,8 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
             content_markdown = restore_math(body, math_spans, ctx.options.math)
         else:
             content_markdown = restore_math_markdown(body, math_spans)
+        if ctx.options.jekyll.highlight_fences:
+            content_markdown = render_fenced_code_blocks(content_markdown)
         document = render_jekyll_markdown(
             content=content_markdown,
             title=title,

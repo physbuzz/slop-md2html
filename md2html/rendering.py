@@ -29,6 +29,8 @@ _INLINE_CODE_RE = re.compile(r"(`+)(.*?)(?<!`)\1", re.DOTALL)
 _OBSIDIAN_IMAGE_RE = re.compile(r"!\[\[(?P<body>[^\]]+)\]\]")
 _HTML_IMAGE_RE = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE)
 _HTML_ATTR_RE = re.compile(r"""(?P<key>[-:\w]+)(?:\s*=\s*(?P<quote>["'])(?P<quoted>.*?)(?P=quote)|\s*=\s*(?P<bare>[^\s"'>]+))?""")
+_FENCE_START_RE = re.compile(r"^(?P<indent>[ \t]{0,3})(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+_ESCAPED_DOLLAR_RE = re.compile(r"(?<!\\)\\\$")
 _ASSETS_DIR = package_resource_path("assets")
 _DEFAULT_TEMPLATE_DIR = package_resource_path("default_templates")
 
@@ -332,6 +334,12 @@ def restore_math_markdown(markdown_text: str, spans: list[MathSpan]) -> str:
     return markdown_text
 
 
+def preserve_escaped_dollars_markdown(markdown_text: str) -> str:
+    code, stored = _protect_code(markdown_text)
+    code = _ESCAPED_DOLLAR_RE.sub(lambda _m: r"\\$", code)
+    return _restore_code(code, stored)
+
+
 def _parse_image_parts(body: str) -> tuple[str, dict[str, str]]:
     parts = [p.strip() for p in body.split("|")]
     target = parts[0]
@@ -465,6 +473,46 @@ def highlight_code(code: str, lang: str | None = None, *, filename: str | None =
     except Exception:
         escaped = html.escape(code)
         return f'<div class="codehilite"><pre><code>{escaped}</code></pre></div>\n'
+
+
+def render_fenced_code_blocks(markdown_text: str) -> str:
+    lines = markdown_text.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        match = _FENCE_START_RE.match(line.rstrip("\r\n"))
+        if not match:
+            out.append(line)
+            i += 1
+            continue
+
+        fence = match.group("fence")
+        fence_char = fence[0]
+        fence_len = len(fence)
+        info = match.group("info").strip()
+        lang = info.split(None, 1)[0] if info else None
+        code_lines: list[str] = []
+        i += 1
+        closed = False
+        close_re = re.compile(rf"^[ \t]{{0,3}}{re.escape(fence_char)}{{{fence_len},}}\s*$")
+
+        while i < len(lines):
+            candidate = lines[i]
+            if close_re.match(candidate.rstrip("\r\n")):
+                closed = True
+                i += 1
+                break
+            code_lines.append(candidate)
+            i += 1
+
+        if closed:
+            out.append(highlight_code("".join(code_lines), lang))
+        else:
+            out.append(line)
+            out.extend(code_lines)
+
+    return "".join(out)
 
 
 def pygments_css(style: str = "default") -> str:

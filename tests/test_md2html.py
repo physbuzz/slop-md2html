@@ -304,6 +304,32 @@ def test_jekyll_math_passthrough_keeps_dollar_delimiters(tmp_path: Path):
     assert "data-tex" not in text
 
 
+def test_jekyll_preserves_escaped_currency_dollars_for_mathjax(tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text("Cost is \\$100, but math is $x + 1$.\n", encoding="utf-8")
+    out = tmp_path / "jekyll" / "note.md"
+
+    MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, output_mode="jekyll")).build_file(source, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "Cost is \\\\$100" in text
+    assert "$x + 1$" in text
+
+
+def test_jekyll_does_not_double_escaped_dollars_in_code(tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text("Inline `\\$100`\n\n```text\n\\$200\n```\n", encoding="utf-8")
+    out = tmp_path / "jekyll" / "note.md"
+
+    MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, output_mode="jekyll")).build_file(source, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "Inline `\\$100`" in text
+    assert "```text\n\\$200\n```" in text
+    assert "\\\\$100" not in text
+    assert "\\\\$200" not in text
+
+
 def test_jekyll_math_html_mode_emits_data_tex_wrappers(tmp_path: Path):
     source = tmp_path / "note.md"
     source.write_text("# Math Note\n\nInline $x_1$ and display:\n\n$$\n\\frac{a}{b}\n$$\n", encoding="utf-8")
@@ -316,6 +342,42 @@ def test_jekyll_math_html_mode_emits_data_tex_wrappers(tmp_path: Path):
 
     assert '<span class="math inline" data-tex="x_1">' in text
     assert '<div class="math display"' in text
+
+
+def test_jekyll_can_render_fenced_code_with_pygments(tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text(
+        """# Code Note
+
+```python
+print("hello")
+```
+""",
+        encoding="utf-8",
+    )
+    out = tmp_path / "jekyll" / "note.md"
+    options = BuildOptions(project_root=tmp_path, output_mode="jekyll")
+    options.jekyll.highlight_fences = True
+    builder = MarkdownSiteBuilder(options)
+    builder.build_file(source, out)
+    text = out.read_text(encoding="utf-8")
+
+    assert "```python" not in text
+    assert '<div class="codehilite">' in text
+    assert "print" in text
+    assert "hello" in text
+
+
+def test_jekyll_leaves_fenced_code_as_markdown_by_default(tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text("# Code Note\n\n```python\nprint('hello')\n```\n", encoding="utf-8")
+    out = tmp_path / "jekyll" / "note.md"
+
+    MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, output_mode="jekyll")).build_file(source, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "```python" in text
+    assert '<div class="codehilite">' not in text
 
 
 def test_jekyll_cli_jobs_use_markdown_suffix(tmp_path: Path):
