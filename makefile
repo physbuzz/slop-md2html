@@ -23,6 +23,7 @@ pyinstaller:
 		--collect-all frontmatter \
 		--add-data "md2html/assets:md2html/assets" \
 		--add-data "md2html/default_templates:md2html/default_templates" \
+		--add-data "readme.md:." \
 		md2html/__main__.py
 
 test:

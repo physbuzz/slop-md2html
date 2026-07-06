@@ -4,6 +4,7 @@ import argparse
 import os
 import shutil
 import sys
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from .builder import MarkdownSiteBuilder, load_options
 from .config import load_config_file
 from .errors import Md2HtmlError
 from .paths import dedupe_paths, has_private_path_part, is_ignored
+from .resources import read_project_readme
+from .scaffold import example_config_json, example_layout_html
 from .watch import serve_and_watch
 
 _HTML_SUFFIXES = {".html", ".htm"}
@@ -38,6 +41,43 @@ def _normalize_config_path(path: Path, cwd: Path) -> Path:
     if not path.is_absolute():
         path = cwd / path
     return path.resolve(strict=False)
+
+
+def _write_example(path: Path, text: str, *, force: bool = False) -> None:
+    if str(path) == "-":
+        print(text, end="" if text.endswith("\n") else "\n")
+        return
+    path = path.expanduser()
+    if path.exists() and not force:
+        raise FileExistsError(f"{path} already exists; use --force-rebuild to replace it")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    print(f"wrote: {path}")
+
+
+def _format_path_list(paths: Iterable[Path]) -> str:
+    return ", ".join(str(path.expanduser()) for path in paths)
+
+
+def _output_label(output: Path | None, jobs: list[tuple[Path, Path]]) -> str:
+    if output is not None:
+        return str(output.expanduser())
+    if not jobs:
+        return str(Path.cwd())
+    parents = [out.parent for _src, out in jobs]
+    try:
+        return os.path.commonpath([str(parent) for parent in parents])
+    except ValueError:
+        return str(parents[0])
+
+
+def _print_build_context(input_roots: list[Path], output: Path | None, jobs: list[tuple[Path, Path]]) -> None:
+    print(f"Source: {_format_path_list(input_roots)}", flush=True)
+    print(f"Destination: {_output_label(output, jobs)}", flush=True)
+
+
+def _format_duration(seconds: float) -> str:
+    return f"{seconds:.3f} seconds"
 
 
 def _explicit_output_dir(output: Path | None) -> Path | None:
@@ -261,12 +301,48 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, help="Configuration file (default: ./md2html.json when present)")
     parser.add_argument("--format", choices=["html", "jekyll"], dest="output_mode", help="Output mode")
     parser.add_argument("--strict", action="store_true", help="Treat missing includes/sources as errors")
+    parser.add_argument("--readme", action="store_true", help="Print the full README and exit")
+    parser.add_argument(
+        "--example-config",
+        nargs="?",
+        const=Path("md2html.json"),
+        type=Path,
+        metavar="PATH",
+        help="Write an example config file and exit (default: md2html.json; use - for stdout)",
+    )
+    parser.add_argument(
+        "--example-layout",
+        nargs="?",
+        const=Path("templates/page.html"),
+        type=Path,
+        metavar="PATH",
+        help="Write an example inline-CSS layout and exit (default: templates/page.html; use - for stdout)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = make_parser()
     args = parser.parse_args(argv)
+    if args.readme:
+        try:
+            text = read_project_readme()
+        except OSError as exc:
+            print(f"md2html: error: could not read README: {exc}", file=sys.stderr)
+            return 2
+        print(text, end="" if text.endswith("\n") else "\n")
+        return 0
+    if args.example_config is not None or args.example_layout is not None:
+        try:
+            if args.example_config is not None:
+                _write_example(args.example_config, example_config_json(), force=args.force_rebuild)
+            if args.example_layout is not None:
+                _write_example(args.example_layout, example_layout_html(), force=args.force_rebuild)
+        except OSError as exc:
+            print(f"md2html: error: {exc}", file=sys.stderr)
+            return 2
+        return 0
+
     cwd = Path.cwd()
     config_path = _normalize_config_path(args.config or (cwd / "md2html.json"), cwd)
     if args.config and not config_path.exists():
@@ -357,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
             print(builder.dry_run_json(jobs))
             return 0
         if args.watch or args.serve:
+            _print_build_context(input_roots, output, jobs)
             if options.output_mode == "jekyll" and options.jekyll_output_root is not None:
                 builder.write_jekyll_assets(options.jekyll_output_root)
             serve_and_watch(
@@ -371,9 +448,18 @@ def main(argv: list[str] | None = None) -> int:
                 verbose=args.verbose,
             )
             return 0
+        _print_build_context(input_roots, output, jobs)
+        print("Generating...", flush=True)
+        start = time.perf_counter()
         failures = 0
+        built = 0
+        skipped = 0
         for src, out in jobs:
             result = builder.build_file(src, out)
+            if result.skipped:
+                skipped += 1
+            else:
+                built += 1
             for diagnostic in result.diagnostics:
                 print(diagnostic.format(), file=sys.stderr)
                 if diagnostic.level == "error":
@@ -385,6 +471,17 @@ def main(argv: list[str] | None = None) -> int:
             builder.write_jekyll_assets(options.jekyll_output_root)
         if failures == 0 and options.copy_assets:
             copy_static_for(jobs)
+        elapsed = time.perf_counter() - start
+        if failures:
+            print(f"finished with {failures} error{'s' if failures != 1 else ''} in {_format_duration(elapsed)}.", flush=True)
+        else:
+            print(f"done in {_format_duration(elapsed)}.", flush=True)
+            if not jobs:
+                print("No pages found.", flush=True)
+            elif skipped:
+                print(f"Built {built} page{'s' if built != 1 else ''}; {skipped} unchanged.", flush=True)
+            else:
+                print(f"Built {built} page{'s' if built != 1 else ''}.", flush=True)
         return 1 if failures else 0
     except (Md2HtmlError, OSError, FileNotFoundError, RuntimeError) as exc:
         print(f"md2html: error: {exc}", file=sys.stderr)

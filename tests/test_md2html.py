@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import errno
+import shutil
 import sys
+
+import pytest
 
 from md2html.builder import MarkdownSiteBuilder, load_options
 from md2html.code import _default_command
@@ -30,8 +33,10 @@ from md2html.watch import (
     _make_http_server,
     _rebuild_message,
     _stop_observer,
+    _timestamp,
     _watch_root_message,
     local_server_url,
+    serve_and_watch,
 )
 
 
@@ -88,6 +93,7 @@ def test_toc_compacts_exercises():
     assert "#exercise-277" in toc
     assert "#exercise-278" in toc
     assert "Solution" not in toc
+    assert '<ul class="toc-list">\n<ul>' not in toc
 
 
 def test_markdown_toc_compacts_exercises():
@@ -346,6 +352,34 @@ def test_jekyll_math_html_mode_emits_data_tex_wrappers(tmp_path: Path):
     assert '<div class="math display"' in text
 
 
+def test_single_math_page_without_frontmatter_uses_heading_title(tmp_path: Path):
+    source = tmp_path / "math.md"
+    source.write_text("# Math Page\n\nInline $x_1$.\n\n$$\nx^2\n$$\n", encoding="utf-8")
+    out = tmp_path / "math.html"
+
+    MarkdownSiteBuilder(BuildOptions(project_root=tmp_path)).build_file(source, out)
+
+    html = out.read_text(encoding="utf-8")
+    assert "<title>Math Page</title>" in html
+    assert '<h1 id="math-page">Math Page</h1>' in html
+    assert 'data-tex="x_1"' in html
+    assert '<div class="math display" data-tex="x^2">' in html
+
+
+def test_single_math_page_with_frontmatter_uses_frontmatter_title(tmp_path: Path):
+    source = tmp_path / "math.md"
+    source.write_text("---\ntitle: Frontmatter Title\n---\n\n# Body Heading\n\nInline $x_1$.\n", encoding="utf-8")
+    out = tmp_path / "math.html"
+
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path)).build_file(source, out)
+
+    html = out.read_text(encoding="utf-8")
+    assert result.metadata == {"title": "Frontmatter Title"}
+    assert "<title>Frontmatter Title</title>" in html
+    assert '<h1 id="body-heading">Body Heading</h1>' in html
+    assert 'data-tex="x_1"' in html
+
+
 def test_jekyll_can_render_fenced_code_with_pygments(tmp_path: Path):
     source = tmp_path / "note.md"
     source.write_text(
@@ -492,6 +526,23 @@ def test_cli_default_input_uses_config_project_root(monkeypatch, tmp_path: Path)
 
     assert (project / "site" / "index.html").exists()
     assert not (tmp_path / "site" / "index.html").exists()
+
+
+def test_cli_build_reports_context_progress_and_summary(monkeypatch, capsys, tmp_path: Path):
+    note = tmp_path / "note.md"
+    note.write_text("# Note\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["note.md", "-o", "html"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Source: note.md" in captured.out
+    assert "Destination: html" in captured.out
+    assert "Generating..." in captured.out
+    assert "done in " in captured.out
+    assert "Built 1 page." in captured.out
+    assert captured.err == ""
 
 
 def test_one_config_can_drive_html_and_jekyll_with_cli_overrides(monkeypatch, tmp_path: Path):
@@ -688,6 +739,66 @@ def test_execute_creates_missing_out_file(tmp_path: Path):
     assert "hello from execute" in html_out.read_text(encoding="utf-8")
 
 
+def test_execute_compiles_cpp_source_when_no_custom_command(tmp_path: Path):
+    if shutil.which("g++") is None:
+        pytest.skip("g++ is required for the default C++ execution path")
+
+    src = tmp_path / "main.cpp"
+    src.write_text(
+        '#include <iostream>\nint main() { std::cout << "cpp ok\\n"; }\n',
+        encoding="utf-8",
+    )
+    page = tmp_path / "page.md"
+    page.write_text("@src(main.cpp)\n", encoding="utf-8")
+    html_out = tmp_path / "page.html"
+    out_file = tmp_path / "main.out"
+
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, execute=True)).build_file(page, html_out)
+
+    assert result.written
+    assert out_file.read_text(encoding="utf-8") == "cpp ok\n"
+    assert "cpp ok" in html_out.read_text(encoding="utf-8")
+
+
+def test_custom_command_can_execute_unmapped_extension(tmp_path: Path):
+    (tmp_path / "code").mkdir()
+    src = tmp_path / "code" / "example.wl"
+    src.write_text("Print[2 + 2]\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    page.write_text("@src(code/example.wl, lang=text)\n", encoding="utf-8")
+    html_out = tmp_path / "page.html"
+    out_file = tmp_path / "code" / "example.out"
+    options = BuildOptions(project_root=tmp_path, execute=True)
+    options.code.commands = {"wl": [sys.executable, "-c", "print('custom wl ok')"]}
+
+    result = MarkdownSiteBuilder(options).build_file(page, html_out)
+
+    assert result.written
+    assert out_file.read_text(encoding="utf-8") == "custom wl ok\n"
+    assert "custom wl ok" in html_out.read_text(encoding="utf-8")
+
+
+def test_src_begin_is_display_only(tmp_path: Path):
+    page = tmp_path / "page.md"
+    page.write_text(
+        """@src-begin(cpp)
+#include <iostream>
+int main() { std::cout << "inline cpp\\n"; }
+@src-end
+""",
+        encoding="utf-8",
+    )
+    html_out = tmp_path / "page.html"
+
+    MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, execute=True)).build_file(page, html_out)
+
+    html = html_out.read_text(encoding="utf-8")
+    assert "inline-source" in html
+    assert "inline cpp" in html
+    assert '<div class="code-output">' not in html
+    assert not (tmp_path / "page.out").exists()
+
+
 def test_default_python_execution_uses_external_python_when_frozen(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     command = _default_command(tmp_path / "hello.py")
@@ -780,6 +891,135 @@ def test_watch_help_describes_serving_behavior():
     assert actions["--serve"].help == "Alias for --watch"
 
 
+def test_help_describes_readme_command():
+    actions = {option: action for action in make_parser()._actions for option in action.option_strings}
+    assert actions["--readme"].help == "Print the full README and exit"
+
+
+def test_help_describes_scaffold_commands():
+    actions = {option: action for action in make_parser()._actions for option in action.option_strings}
+    assert actions["--example-config"].help == "Write an example config file and exit (default: md2html.json; use - for stdout)"
+    assert actions["--example-layout"].help == "Write an example inline-CSS layout and exit (default: templates/page.html; use - for stdout)"
+
+
+def test_readme_command_prints_full_readme_from_any_directory(monkeypatch, capsys, tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[1]
+    expected = (repo_root / "readme.md").read_text(encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--readme"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out == expected
+    assert captured.err == ""
+
+
+def test_example_config_command_writes_default_file(monkeypatch, capsys, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--example-config"])
+    captured = capsys.readouterr()
+    data = json.loads((tmp_path / "md2html.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert captured.out == "wrote: md2html.json\n"
+    assert captured.err == ""
+    assert data["input"] == "notes"
+    assert data["output"] == "html"
+    assert data["template_dirs"] == ["templates"]
+    assert data["template"] == "page.html"
+    assert data["math"] == {"backend": "mathjax"}
+    assert data["code"]["commands"]["wl"] == "wolframscript -file {src}"
+    assert data["jekyll"]["frontmatter"] == {"render_with_liquid": False}
+
+
+def test_example_config_can_print_to_stdout(monkeypatch, capsys, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--example-config", "-"])
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert data["input"] == "notes"
+    assert not (tmp_path / "md2html.json").exists()
+    assert captured.err == ""
+
+
+def test_example_config_refuses_to_overwrite_without_force(monkeypatch, capsys, tmp_path: Path):
+    target = tmp_path / "md2html.json"
+    target.write_text("keep me\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--example-config"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert target.read_text(encoding="utf-8") == "keep me\n"
+    assert "already exists" in captured.err
+
+
+def test_example_config_force_rebuild_replaces_existing_file(monkeypatch, capsys, tmp_path: Path):
+    target = tmp_path / "md2html.json"
+    target.write_text("replace me\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--example-config", "--force-rebuild"])
+    captured = capsys.readouterr()
+    data = json.loads(target.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert data["output_mode"] == "html"
+    assert captured.err == ""
+
+
+def test_example_layout_command_writes_inline_css_layout(monkeypatch, capsys, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--example-layout"])
+    captured = capsys.readouterr()
+    layout = (tmp_path / "templates" / "page.html").read_text(encoding="utf-8")
+
+    assert exit_code == 0
+    assert captured.out == "wrote: templates/page.html\n"
+    assert captured.err == ""
+    assert '<style>\n/* Default md2html stylesheet. Edit this block freely. */' in layout
+    assert ".codehilite" in layout
+    assert ".table-of-contents" in layout
+    assert "{{ content | safe }}" in layout
+    assert "{% raw %}{% if embedded_css %}<style>" in layout
+    assert "{{ embedded_css | safe }}" in layout
+
+    source = tmp_path / "note.md"
+    out = tmp_path / "note.html"
+    source.write_text("# Rendered With Example Layout\n", encoding="utf-8")
+    options = BuildOptions(project_root=tmp_path, template_dirs=[tmp_path / "templates"])
+    MarkdownSiteBuilder(options).build_file(source, out)
+    rendered = out.read_text(encoding="utf-8")
+    assert '<h1 id="rendered-with-example-layout">Rendered With Example Layout</h1>' in rendered
+
+
+def test_example_layout_can_print_to_stdout(monkeypatch, capsys, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--example-layout", "-"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "<!DOCTYPE html>" in captured.out
+    assert ".container" in captured.out
+    assert not (tmp_path / "templates" / "page.html").exists()
+    assert captured.err == ""
+
+
+def test_executable_build_bundles_readme():
+    repo_root = Path(__file__).resolve().parents[1]
+    makefile = (repo_root / "makefile").read_text(encoding="utf-8")
+
+    assert '--add-data "readme.md:."' in makefile
+
+
 def test_watch_status_message_hides_implementation_detail(tmp_path: Path):
     message = _watch_root_message([tmp_path], WatchExclusions())
     assert message == f"Watching for changes in {tmp_path}"
@@ -794,6 +1034,41 @@ def test_watch_build_messages_are_human_readable():
     assert _rebuild_message(1) == "Regenerated 1 page."
     assert _rebuild_message(2) == "Regenerated 2 pages."
     assert _rebuild_message(0) == "Change detected, no pages needed rebuilding."
+
+
+def test_watch_timestamp_uses_status_message_format():
+    from datetime import datetime
+
+    assert _timestamp(datetime(2026, 7, 6, 11, 46, 59)) == "2026-07-06 11:46:59"
+
+
+def test_serve_and_watch_prints_clickable_server_address(monkeypatch, capsys, tmp_path: Path):
+    class Server:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return None
+
+        def serve_forever(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    note = tmp_path / "note.md"
+    note.write_text("# Note\n", encoding="utf-8")
+    out = tmp_path / "html" / "note.html"
+    builder = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path))
+    monkeypatch.setattr("md2html.watch._make_http_server", lambda handler, port: Server())
+    monkeypatch.setattr("md2html.watch.watch_jobs", lambda *args, **kwargs: None)
+
+    serve_and_watch(builder, [(note, out)], port=8765)
+    captured = capsys.readouterr()
+
+    assert "Server address: http://127.0.0.1:8765/" in captured.out
+    assert "Server running... press Ctrl+C to stop." in captured.out
+    assert captured.err == ""
 
 
 def test_http_server_reports_busy_requested_port(monkeypatch):
@@ -926,6 +1201,15 @@ def test_resource_lookup_finds_packaged_assets():
     from md2html.resources import package_resource_path
 
     assert package_resource_path("assets/base.css").exists()
+
+
+def test_generated_styles_keep_toc_compact():
+    from md2html.rendering import base_css, jekyll_compat_css
+
+    for css in (base_css(), jekyll_compat_css()):
+        assert ".table-of-contents { margin: 0 0 .8rem; padding: 0; font-size: .9rem; line-height: 1.2; }" in css
+        assert ".toc-list, .toc-list ul { margin: 0; padding-left: 1rem; }" in css
+        assert ".toc-list li { margin-bottom: 2px; }" in css
 
 
 def test_src_inside_include_resolves_relative_to_included_file(tmp_path: Path):

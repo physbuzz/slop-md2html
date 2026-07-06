@@ -100,6 +100,12 @@ class TocHeading:
         return plain_text(self.title).strip()
 
 
+@dataclass
+class _TocNode:
+    heading: TocHeading
+    children: list["_TocNode"] = field(default_factory=list)
+
+
 def collect_headings(markdown_text: str) -> list[TocHeading]:
     slugger = Slugger()
     headings: list[TocHeading] = []
@@ -152,46 +158,43 @@ def _exercise_markdown_list(headings: list[TocHeading]) -> str:
     return f"  - *Exercises:* ({links})"
 
 
+def _toc_tree(headings: list[TocHeading]) -> list[_TocNode]:
+    roots: list[_TocNode] = []
+    stack: list[tuple[int, list[_TocNode]]] = [(0, roots)]
+    for heading in headings:
+        while stack and heading.level <= stack[-1][0]:
+            stack.pop()
+        node = _TocNode(heading)
+        stack[-1][1].append(node)
+        stack.append((heading.level, node.children))
+    return roots
+
+
 def generate_toc(headings: list[TocHeading], *, title: str = "Directory") -> str:
     if not headings:
         return ""
 
     exercises = [h for h in headings if _EXERCISE_RE.match(h.text)]
     exercise_ids = {h.id for h in exercises}
-    lines = ['<div class="table-of-contents">', f'<h2>{html.escape(title)}</h2>', '<ul class="toc-list">']
-    stack: list[int] = []
+    tree = _toc_tree([h for h in headings if h.id not in exercise_ids])
+    lines = ['<div class="table-of-contents">', f'<h2>{html.escape(title)}</h2>']
 
-    def close_to(level: int) -> None:
-        while stack and stack[-1] >= level:
-            lines.append("</ul>")
-            stack.pop()
-
-    for heading in headings:
-        if heading.id in exercise_ids:
-            continue
-        text = heading.text.lower()
-        is_exercises = text == "exercises"
-        level = heading.level
-        if not stack:
-            lines.append("<ul>")
-            stack.append(level)
-        elif level > stack[-1]:
-            while stack[-1] < level:
-                lines.append("<ul>")
-                stack.append(stack[-1] + 1)
-        elif level < stack[-1]:
-            close_to(level + 1)
-        if is_exercises:
-            lines.append(f'<li>{_link(heading, extra_class="toc-exercises")}')
-            lines.append(_exercise_list(exercises))
+    def render_nodes(nodes: list[_TocNode], *, root: bool = False) -> None:
+        lines.append('<ul class="toc-list">' if root else "<ul>")
+        for node in nodes:
+            heading = node.heading
+            if heading.text.lower() == "exercises":
+                lines.append(f'<li>{_link(heading, extra_class="toc-exercises")}')
+                lines.append(_exercise_list(exercises))
+            else:
+                lines.append(f"<li>{_link(heading)}")
+            if node.children:
+                render_nodes(node.children)
             lines.append("</li>")
-        else:
-            lines.append(f"<li>{_link(heading)}</li>")
-
-    while stack:
         lines.append("</ul>")
-        stack.pop()
-    lines.extend(["</ul>", "</div>"])
+
+    render_nodes(tree, root=True)
+    lines.append("</div>")
     return "\n".join(lines)
 
 
@@ -538,6 +541,14 @@ def jekyll_compat_css() -> str:
             ".code-summary::before { content: '►'; position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); font-size: .7em; transition: transform .15s ease; }",
             ".collapsible-code[open] > .code-summary::before { transform: translateY(-50%) rotate(90deg); }",
             ".expand-hint { font-style: italic; color: #888; margin-left: .5rem; }",
+            ".table-of-contents { margin: 0 0 .8rem; padding: 0; font-size: .9rem; line-height: 1.2; }",
+            ".table-of-contents h2 { margin: 0 0 .25rem; font-size: 1.1rem; }",
+            ".toc-list, .toc-list ul { margin: 0; padding-left: 1rem; }",
+            ".toc-list li { margin-bottom: 2px; }",
+            ".exercise-container { display: inline-block; margin-left: .25rem; line-height: 1.2; }",
+            ".exercise-list { display: inline; padding-left: 0; font-size: .95em; }",
+            ".exercise-list span:not(:last-child)::after { content: ', '; color: #777; }",
+            ".toc-exercises { font-style: italic; color: #555; }",
             ".obsidian-image { display: block; margin: 1rem auto; }",
             ".md2html-warning { border-left: 4px solid #d29922; background: #fff8c5; padding: .75rem 1rem; margin: 1rem 0; }",
         ]

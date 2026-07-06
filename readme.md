@@ -78,9 +78,30 @@ md2html note.md --dry-run
 md2html note.md --format jekyll
 md2html note.md --execute
 md2html --config path/to/md2html.json
+md2html --readme
+md2html --example-config
+md2html --example-layout
 ```
 
 `md2html` reads `./md2html.json` automatically when it exists. Use `--config path/to/md2html.json` to pass a different file. Relative `input`, `output`, `project_root`, and template paths inside a config file are resolved from that config file's directory.
+
+## Self-Contained Help
+
+These commands are intended for people and tools that have the executable but not the repository open:
+
+```bash
+md2html --readme
+md2html --example-config
+md2html --example-layout
+```
+
+- `--readme` prints this README and exits.
+- `--example-config [path]` writes a complete example config. The default path is `md2html.json`.
+- `--example-layout [path]` writes a single-file HTML layout with the default stylesheet inlined. The default path is `templates/page.html`.
+- Pass `-` as the path to print either example to stdout.
+- Existing files are not overwritten unless `--force-rebuild` is also passed.
+
+The generated layout is for md2html HTML output. For Jekyll output, use the `jekyll` config section to set front matter defaults such as `layout`, and customize your Jekyll site's layouts normally.
 
 ## Configuration
 
@@ -113,6 +134,20 @@ A compact `md2html.json`:
   }
 }
 ```
+
+For a fuller starting point that includes every major section, run:
+
+```bash
+md2html --example-config
+```
+
+To customize the default HTML layout and CSS, run:
+
+```bash
+md2html --example-layout
+```
+
+The generated config points at `templates/page.html`, so those two commands work together as a starting point.
 
 Canonical top-level keys:
 
@@ -162,7 +197,7 @@ Nested keys:
 }
 ```
 
-- `math.backend`: Math renderer used by HTML output. The bundled template expects `"mathjax"`.
+- `math.backend`: Math renderer used by HTML output. The bundled template includes browser-side math rendering when this is `"mathjax"` and otherwise emits md2html math wrappers without loading a renderer.
 - `images.class`: Default CSS class added to Obsidian image embeds. Alias: `class_name`. The alternate section name `obsidian_images` is also accepted.
 - `images.width`: Default width for Obsidian image embeds.
 - `code.commands`: Execution commands by file extension or language. Commands may use `{src}` for the source path and `{stem}` for the source path without its suffix.
@@ -241,14 +276,15 @@ Embeds a source file. If `--execute` is enabled, the source is run when the sibl
 @src(example.py, lang=python, caption="Runnable example")
 ```
 
-Default execution commands are provided for Python, shell, Node, Racket, C, and C++. You can override or add commands in `md2html.json`:
+Default execution commands are provided for Python, shell, Node, Racket, C, and C++. You can override or add commands in `md2html.json`; this is also how to run file types that md2html does not know about directly:
 
 ```json
 {
   "code": {
     "commands": {
       "rkt": "racket {src}",
-      "py": "python {src}"
+      "py": "python {src}",
+      "wl": "wolframscript -file {src}"
     },
     "timeout": 10,
     "output_suffix": ".out"
@@ -260,7 +296,7 @@ The watch graph records article-level edges such as `main.cpp -> page.md` and, w
 
 ### `@src-begin(lang, godbolt)`
 
-Embeds an inline code block. Close with `@src-end`.
+Embeds an inline code block. Close with `@src-end`. Inline source blocks are display-only: they are highlighted but are not executed and do not use `code.commands`.
 
 ```md
 @src-begin(cpp, godbolt)
@@ -293,3 +329,8 @@ print(result.as_dict())
 The dependency graph models Markdown `@include` relationships and direct article dependencies from `@src(...)` source/output files. It is intentionally an article rebuild graph, not a general language build graph.
 
 Source execution runs local commands on the current machine. Keep `execute` disabled for untrusted notes or source files.
+
+TODOs:
+
+- Inline `@src-begin(...)` execution is not implemented. Use file-backed `@src(path)` blocks when output capture or custom commands are needed.
+- Non-MathJax math output needs a renderer extension point before `math.backend` can produce SVG or MathML directly.

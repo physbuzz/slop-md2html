@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .builder import MarkdownSiteBuilder
@@ -107,6 +108,12 @@ class _ExclusionState:
             return self._exclusions.ignores(path)
 
 
+@dataclass(frozen=True)
+class BuildBatchResult:
+    built: int
+    errors: int = 0
+
+
 def plan_affected_jobs(builder: MarkdownSiteBuilder, jobs: list[Job], changed_paths: Iterable[Path]) -> list[Job]:
     graph = build_dependency_graph(jobs, builder.options)
     return graph.affected_jobs(changed_paths)
@@ -133,13 +140,35 @@ class _RebuildSignalHandler:
         return Handler()
 
 
-def _build_all(builder: MarkdownSiteBuilder, jobs: list[Job], *, verbose: bool = False) -> None:
+def _display_path(path: Path, *, root: Path | None = None) -> str:
+    path = resolve_lenient(path)
+    if root is not None:
+        try:
+            return path.relative_to(resolve_lenient(root)).as_posix()
+        except ValueError:
+            pass
+    return str(path)
+
+
+def _format_duration(seconds: float) -> str:
+    return f"{seconds:.3f} seconds"
+
+
+def _timestamp(now: datetime | None = None) -> str:
+    return (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _build_all(builder: MarkdownSiteBuilder, jobs: list[Job], *, verbose: bool = False) -> BuildBatchResult:
+    errors = 0
     for src, out in jobs:
         result = builder.build_file(src, out)
         if verbose:
             print(f"built: {src} -> {out}")
         for diagnostic in result.diagnostics:
             print(diagnostic.format())
+            if diagnostic.level == "error":
+                errors += 1
+    return BuildBatchResult(built=len(jobs), errors=errors)
 
 
 def _dependency_is_newer_than_output(dependency: Path, output: Path) -> bool:
@@ -210,7 +239,14 @@ def _rebuild_message(count: int) -> str:
 
 def _initial_build(builder: MarkdownSiteBuilder, jobs: list[Job], *, verbose: bool = False) -> None:
     stale_jobs, up_to_date = _jobs_needing_build(builder, jobs)
-    _build_all(builder, stale_jobs, verbose=verbose)
+    start = time.perf_counter()
+    print("Generating...", flush=True)
+    result = _build_all(builder, stale_jobs, verbose=verbose)
+    elapsed = time.perf_counter() - start
+    if result.errors:
+        print(f"finished with {result.errors} {_plural(result.errors, 'error')} in {_format_duration(elapsed)}.", flush=True)
+    else:
+        print(f"done in {_format_duration(elapsed)}.", flush=True)
     print(_initial_build_message(len(stale_jobs), up_to_date), flush=True)
 
 
@@ -358,13 +394,18 @@ def watch_jobs(
             except Md2HtmlError as exc:
                 print(f"ERROR: {exc}")
                 continue
-            print(_rebuild_message(len(jobs_to_build)), flush=True)
-            if verbose:
-                changed = ", ".join(str(path) for path in changed_paths)
-                print(f"changed: {changed}")
-            _build_all(builder, jobs_to_build, verbose=verbose)
+            print(f"Regenerating: {len(changed_paths)} {_plural(len(changed_paths), 'file')} changed at {_timestamp()}", flush=True)
+            for path in changed_paths:
+                print(f"              {_display_path(path, root=builder.options.project_root)}", flush=True)
+            start = time.perf_counter()
+            result = _build_all(builder, jobs_to_build, verbose=verbose)
             if static_copier is not None:
                 static_copier(current_jobs)
+            elapsed = time.perf_counter() - start
+            if result.errors:
+                print(f"finished with {result.errors} {_plural(result.errors, 'error')} in {_format_duration(elapsed)}.", flush=True)
+            else:
+                print(f"{_rebuild_message(result.built)} done in {_format_duration(elapsed)}.", flush=True)
     except KeyboardInterrupt:
         return
     finally:
@@ -395,8 +436,8 @@ def serve_and_watch(
     with httpd:
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
-        print(f"Server running at {local_server_url(port)}", flush=True)
-        print("Press Ctrl+C to stop.", flush=True)
+        print(f"Server address: {local_server_url(port)}", flush=True)
+        print("Server running... press Ctrl+C to stop.", flush=True)
         try:
             watch_jobs(
                 builder,
