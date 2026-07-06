@@ -275,7 +275,7 @@ def _config_inputs(config_path: Path) -> tuple[list[Path], Path | None, bool]:
     if not config_path.exists():
         return [], None, False
     data = load_config_file(config_path)
-    raw_inputs = data.get("files", data.get("inputs", data.get("input", [])))
+    raw_inputs = data.get("input", [])
     raw_output = data.get("output")
     recursive = bool(data.get("recursive", False))
     base_dir = config_path.parent
@@ -290,7 +290,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("-o", "--output", type=Path, help="Output file for one input or output directory for many inputs")
     parser.add_argument("-r", "--recursive", action="store_true", help="Process directories recursively")
     parser.add_argument("-w", "--watch", action="store_true", help="Start a local development server, watch inputs, and rebuild on change")
-    parser.add_argument("-s", "--serve", action="store_true", help="Alias for --watch")
+    parser.add_argument("-s", "--serve", action="store_true", help="Start a local development server, watch inputs, and rebuild on change")
     parser.add_argument("-p", "--port", type=int, default=8000, help="Development server port (default: 8000)")
     parser.add_argument("-e", "--execute", action="store_true", help="Execute @src code embeds and refresh .out files")
     parser.add_argument("-n", "--no-overwrite", action="store_true", help="Do not overwrite existing files")
@@ -316,7 +316,7 @@ def make_parser() -> argparse.ArgumentParser:
         const=Path("templates/page.html"),
         type=Path,
         metavar="PATH",
-        help="Write an example inline-CSS layout and exit (default: templates/page.html; use - for stdout)",
+        help="Write an example layout with inline page and feature CSS and exit (default: templates/page.html; use - for stdout)",
     )
     return parser
 

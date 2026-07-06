@@ -1,0 +1,14 @@
+.math.display {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 1rem 0;
+}
+.math.inline {
+  white-space: nowrap;
+}
+.MathJax {
+  overflow-x: auto;
+  overflow-y: hidden;
+}

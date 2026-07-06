@@ -38,6 +38,19 @@ _TEMPLATE_CSS = {
     "barebones.html": "barebones.css",
     "page.html": "page.css",
 }
+_FEATURE_CSS = {
+    "inline_code": "feature-inline-code.css",
+    "code_highlight": "feature-code-highlight.css",
+    "code_box": "feature-code-box.css",
+    "collapsible_code": "feature-collapsible-code.css",
+    "code_output": "feature-code-output.css",
+    "toc": "feature-toc.css",
+    "math": "feature-math.css",
+    "image": "feature-image.css",
+    "obsidian_image": "feature-obsidian-image.css",
+    "warning": "feature-warning.css",
+}
+ALL_FEATURES = frozenset(_FEATURE_CSS)
 
 _SUFFIX_LANG = {
     ".py": "python",
@@ -232,6 +245,10 @@ def prepare_toc(markdown_text: str, *, output_mode: str = "html") -> tuple[str, 
     return replace_toc(markdown_text, toc), headings, toc
 
 
+def has_toc_marker(markdown_text: str) -> bool:
+    return bool(_TOC_RE.search(markdown_text))
+
+
 @dataclass(frozen=True)
 class MathSpan:
     placeholder: str
@@ -408,6 +425,8 @@ def _resolve_obsidian_image(match: re.Match[str], ctx: BuildContext, current_fil
 
 def process_obsidian_images(text: str, ctx: BuildContext, *, current_file: Path | None = None) -> str:
     def repl(match: re.Match[str]) -> str:
+        ctx.use_feature("image")
+        ctx.use_feature("obsidian_image")
         image = _resolve_obsidian_image(match, ctx, current_file)
         attr_bits = [f'src="{html.escape(image.url, quote=True)}"', f'alt="{html.escape(image.alt, quote=True)}"']
         if image.classes:
@@ -546,12 +565,13 @@ def jekyll_compat_css() -> str:
             ".code-summary::before { content: '►'; position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); font-size: .7em; transition: transform .15s ease; }",
             ".collapsible-code[open] > .code-summary::before { transform: translateY(-50%) rotate(90deg); }",
             ".expand-hint { font-style: italic; color: #888; margin-left: .5rem; }",
-            ".table-of-contents { margin: 0 0 .8rem; padding: 0; font-size: .9rem; line-height: 1.2; }",
+            ".table-of-contents { margin: 0; padding: 0; font-size: .9rem; line-height: 1; }",
             ".table-of-contents h2 { margin: 0 0 .25rem; font-size: 1.1rem; }",
-            ".toc-list, .toc-list ul { margin: 0; padding-left: 1rem; }",
+            ".toc-list, .toc-list ul { margin: 0; padding-left: 20px; }",
+            ".toc-list ul { margin-bottom: 2px; }",
             ".toc-list li { margin-bottom: 2px; }",
-            ".exercise-container { display: inline-block; margin-left: .25rem; line-height: 1.2; }",
-            ".exercise-list { display: inline; padding-left: 0; font-size: .95em; }",
+            ".exercise-container { display: inline-block; margin-top: 2px; line-height: 1.2; }",
+            ".exercise-list { display: inline; margin: 0; padding-left: 0; font-size: .95em; }",
             ".exercise-list span:not(:last-child)::after { content: ', '; color: #777; }",
             ".toc-exercises { font-style: italic; color: #555; }",
             ".obsidian-image { display: block; margin: 1rem auto; }",
@@ -571,12 +591,21 @@ class Md2HtmlRenderer(mistune.HTMLRenderer):
         return f'<h{level} id="{html.escape(ident, quote=True)}">{text}</h{level}>\n'
 
     def block_code(self, code: str, info: str | None = None) -> str:
+        if self.ctx is not None:
+            self.ctx.use_feature("code_highlight")
         lang = None
         if info:
             lang = info.strip().split(None, 1)[0]
         return highlight_code(code, lang)
 
+    def codespan(self, text: str) -> str:
+        if self.ctx is not None:
+            self.ctx.use_feature("inline_code")
+        return f"<code>{html.escape(text)}</code>"
+
     def image(self, text: str, url: str, title: str | None = None) -> str:
+        if self.ctx is not None:
+            self.ctx.use_feature("image")
         final_url = url
         if self.ctx is not None:
             final_url = self.ctx.asset_url(url, current_file=self.ctx.source_path)
@@ -651,11 +680,29 @@ def _read_css_ref(ref: str | Path, options: BuildOptions) -> str:
     raise FileNotFoundError(f"CSS file does not exist: {ref}")
 
 
-def embedded_css_for_template(template_name: str, options: BuildOptions, metadata: dict[str, Any] | None = None) -> str:
+def _feature_css(features: set[str]) -> list[str]:
+    parts: list[str] = []
+    if "code_highlight" in features:
+        parts.append(pygments_css())
+    for feature, css_name in _FEATURE_CSS.items():
+        if feature in features:
+            parts.append(asset_css(css_name))
+    return parts
+
+
+def embedded_css_for_template(
+    template_name: str,
+    options: BuildOptions,
+    metadata: dict[str, Any] | None = None,
+    features: set[str] | frozenset[str] | None = None,
+) -> str:
     metadata = metadata or {}
-    parts = [pygments_css()]
-    parts.extend(_read_css_ref(ref, options) for ref in _configured_css_refs(metadata, options, template_name))
-    return "\n\n".join(part.rstrip() for part in parts if part.strip()) + "\n"
+    active_features = set(features or ())
+    parts = [_read_css_ref(ref, options) for ref in _configured_css_refs(metadata, options, template_name)]
+    if options.feature_css:
+        parts.extend(_feature_css(active_features))
+    body = "\n\n".join(part.rstrip() for part in parts if part.strip())
+    return body + "\n" if body else ""
 
 
 def make_environment(options: BuildOptions) -> Environment:
@@ -675,14 +722,17 @@ def render_template(
     metadata: dict[str, Any],
     options: BuildOptions,
     template_name: str | None = None,
+    features: set[str] | None = None,
+    source_name: str | None = None,
 ) -> str:
     env = make_environment(options)
     name = template_name or options.template
     template = env.get_template(name)
+    active_features = set(features or ())
     css = ""
     stylesheets = [*options.stylesheets, *_as_list(metadata.get("stylesheets"))]
     if options.embed_assets:
-        css = embedded_css_for_template(name, options, metadata)
+        css = embedded_css_for_template(name, options, metadata, active_features)
     return template.render(
         content=content,
         title=title,
@@ -690,7 +740,11 @@ def render_template(
         metadata=metadata,
         embedded_css=css,
         stylesheets=stylesheets,
-        use_mathjax=options.math.backend == "mathjax",
+        features=sorted(active_features),
+        uses={feature: feature in active_features for feature in ALL_FEATURES},
+        use_mathjax=options.math.backend == "mathjax" and "math" in active_features,
+        header_title=metadata.get("title") or source_name or title,
+        source_name=source_name,
         lang=metadata.get("lang", "en"),
         layout=metadata.get("layout", "post"),
     )

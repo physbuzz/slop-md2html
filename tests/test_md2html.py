@@ -376,6 +376,7 @@ def test_single_math_page_with_frontmatter_uses_frontmatter_title(tmp_path: Path
     html = out.read_text(encoding="utf-8")
     assert result.metadata == {"title": "Frontmatter Title"}
     assert "<title>Frontmatter Title</title>" in html
+    assert '<div class="page-title">Frontmatter Title</div>' in html
     assert '<h1 id="body-heading">Body Heading</h1>' in html
     assert 'data-tex="x_1"' in html
 
@@ -427,20 +428,21 @@ def test_jekyll_cli_jobs_use_markdown_suffix(tmp_path: Path):
     assert jobs == [(page, site / "jekyll" / "index.md")]
 
 
-def test_config_aliases_and_defaults_are_sensible(tmp_path: Path):
+def test_config_keys_and_defaults_are_sensible(tmp_path: Path):
     options = options_from_mapping(
         {
-            "root": "notes",
-            "templates": ["templates"],
-            "format": "jekyll",
+            "project_root": "notes",
+            "template_dirs": ["templates"],
+            "output_mode": "jekyll",
             "css": ["styles/article.css"],
             "stylesheets": ["print.css"],
-            "math_backend": "mathjax",
-            "timeout": 6,
-            "embed_styles": False,
-            "obsidian_images": {"class_name": "figure", "width": "75%"},
+            "feature_css": False,
+            "math": {"backend": "mathjax"},
+            "embed_assets": False,
+            "images": {"class": "figure", "width": "75%"},
             "code": {
                 "commands": {"py": "python {src}"},
+                "timeout": 6,
                 "output_suffix": ".run",
             },
             "jekyll": {
@@ -458,6 +460,7 @@ def test_config_aliases_and_defaults_are_sensible(tmp_path: Path):
     assert options.template_dirs == [options.project_root / "templates"]
     assert options.css == ["styles/article.css"]
     assert options.stylesheets == ["print.css"]
+    assert options.feature_css is False
     assert options.output_mode == "jekyll"
     assert options.math.backend == "mathjax"
     assert options.code.timeout == 6
@@ -892,7 +895,7 @@ def test_local_server_url_is_clickable_loopback_url():
 def test_watch_help_describes_serving_behavior():
     actions = {option: action for action in make_parser()._actions for option in action.option_strings}
     assert actions["--watch"].help == "Start a local development server, watch inputs, and rebuild on change"
-    assert actions["--serve"].help == "Alias for --watch"
+    assert actions["--serve"].help == "Start a local development server, watch inputs, and rebuild on change"
 
 
 def test_help_describes_readme_command():
@@ -903,7 +906,7 @@ def test_help_describes_readme_command():
 def test_help_describes_scaffold_commands():
     actions = {option: action for action in make_parser()._actions for option in action.option_strings}
     assert actions["--example-config"].help == "Write an example config file and exit (default: md2html.json; use - for stdout)"
-    assert actions["--example-layout"].help == "Write an example inline-CSS layout and exit (default: templates/page.html; use - for stdout)"
+    assert actions["--example-layout"].help == "Write an example layout with inline page and feature CSS and exit (default: templates/page.html; use - for stdout)"
 
 
 def test_readme_command_prints_full_readme_from_any_directory(monkeypatch, capsys, tmp_path: Path):
@@ -934,6 +937,7 @@ def test_example_config_command_writes_default_file(monkeypatch, capsys, tmp_pat
     assert data["template_dirs"] == ["templates"]
     assert data["template"] == "page.html"
     assert data["css"] is None
+    assert data["feature_css"] is True
     assert data["math"] == {"backend": "mathjax"}
     assert data["code"]["commands"]["wl"] == "wolframscript -file {src}"
     assert data["jekyll"]["frontmatter"] == {"render_with_liquid": False}
@@ -990,7 +994,8 @@ def test_example_layout_command_writes_inline_css_layout(monkeypatch, capsys, tm
     assert captured.out == "wrote: templates/page.html\n"
     assert captured.err == ""
     assert '<style>\n/* Default md2html page stylesheet. Edit this block freely. */' in layout
-    assert "--reader-paper" in layout
+    assert "--reader-page-bg" in layout
+    assert "page-title" in layout
     assert "reader-widget" in layout
     assert ".codehilite" in layout
     assert ".table-of-contents" in layout
@@ -1207,7 +1212,22 @@ def test_execute_uses_fresh_out_file_without_rerunning(tmp_path: Path):
 def test_resource_lookup_finds_packaged_assets():
     from md2html.resources import package_resource_path
 
-    for css_name in ("super-barebones.css", "barebones.css", "page.css"):
+    css_names = (
+        "super-barebones.css",
+        "barebones.css",
+        "page.css",
+        "feature-inline-code.css",
+        "feature-code-highlight.css",
+        "feature-code-box.css",
+        "feature-collapsible-code.css",
+        "feature-code-output.css",
+        "feature-toc.css",
+        "feature-math.css",
+        "feature-image.css",
+        "feature-obsidian-image.css",
+        "feature-warning.css",
+    )
+    for css_name in css_names:
         assert package_resource_path(f"assets/{css_name}").exists()
     for template_name in ("super-barebones.html", "barebones.html", "page.html"):
         assert package_resource_path(f"default_templates/{template_name}").exists()
@@ -1220,12 +1240,91 @@ def test_bundled_template_styles_are_distinct():
     barebones = asset_css("barebones.css")
     page = asset_css("page.css")
 
-    assert "body {" not in super_barebones
-    assert ".code-box" in super_barebones
+    assert super_barebones.strip() == ""
+    assert ".code-box" not in barebones
+    assert ".table-of-contents" not in barebones
     assert "box-shadow" in barebones
     assert "reader-widget" not in barebones
+    assert ".code-box" not in page
+    assert ".table-of-contents" not in page
     assert "reader-widget" in page
     assert "prefers-color-scheme: dark" in page
+
+
+def test_super_barebones_plain_page_embeds_no_css_or_mathjax(tmp_path: Path):
+    source = tmp_path / "plain.md"
+    source.write_text("# Plain\n\nText.\n", encoding="utf-8")
+    out = tmp_path / "plain.html"
+
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, template="super-barebones.html")).build_file(source, out)
+    html = out.read_text(encoding="utf-8")
+
+    assert "<style>" not in html
+    assert "MathJax-script" not in html
+    assert result.features == set()
+
+
+def test_math_assets_are_embedded_only_for_math_pages(tmp_path: Path):
+    source = tmp_path / "math.md"
+    source.write_text("# Math\n\nInline $x_1$.\n", encoding="utf-8")
+    out = tmp_path / "math.html"
+
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, template="super-barebones.html")).build_file(source, out)
+    html = out.read_text(encoding="utf-8")
+
+    assert "MathJax-script" in html
+    assert ".math.inline" in html
+    assert ".codehilite" not in html
+    assert result.features == {"math"}
+
+
+def test_code_assets_are_embedded_only_for_code_pages(tmp_path: Path):
+    source = tmp_path / "code.md"
+    source.write_text("# Code\n\n```python\nprint(1)\n```\n", encoding="utf-8")
+    out = tmp_path / "code.html"
+
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, template="super-barebones.html")).build_file(source, out)
+    html = out.read_text(encoding="utf-8")
+
+    assert ".codehilite" in html
+    assert ".code-box" not in html
+    assert ".math.inline" not in html
+    assert "MathJax-script" not in html
+    assert result.features == {"code_highlight"}
+
+
+def test_src_and_toc_assets_follow_used_features(tmp_path: Path):
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    (code_dir / "snippet.py").write_text("print('hello')\n", encoding="utf-8")
+    source = tmp_path / "page.md"
+    source.write_text("# Page\n\n@toc\n\n## Code\n\n@src(code/snippet.py, collapsed)\n", encoding="utf-8")
+    out = tmp_path / "page.html"
+
+    result = MarkdownSiteBuilder(BuildOptions(project_root=tmp_path, template="super-barebones.html")).build_file(source, out)
+    html = out.read_text(encoding="utf-8")
+
+    assert ".table-of-contents" in html
+    assert ".code-box" in html
+    assert ".collapsible-code" in html
+    assert ".code-output" not in html
+    assert ".math.inline" not in html
+    assert result.features == {"toc", "code_box", "code_highlight", "collapsible_code"}
+
+
+def test_feature_css_can_be_disabled_independently_of_template_css(tmp_path: Path):
+    source = tmp_path / "code.md"
+    source.write_text("# Code\n\n```python\nprint(1)\n```\n", encoding="utf-8")
+    out = tmp_path / "code.html"
+    options = BuildOptions(project_root=tmp_path, template="barebones.html", feature_css=False)
+
+    result = MarkdownSiteBuilder(options).build_file(source, out)
+    html = out.read_text(encoding="utf-8")
+
+    assert "box-shadow" in html
+    assert ".codehilite .hll" not in html
+    assert ".codehilite {" not in html
+    assert result.features == {"code_highlight"}
 
 
 def test_page_template_renders_reader_widget_without_duplicate_title(tmp_path: Path):
@@ -1237,11 +1336,12 @@ def test_page_template_renders_reader_widget_without_duplicate_title(tmp_path: P
     MarkdownSiteBuilder(options).build_file(source, out)
 
     html = out.read_text(encoding="utf-8")
+    assert '<div class="page-title">note.md</div>' in html
     assert '<details class="reader-widget">' in html
     assert ">Aa</summary>" in html
     assert 'id="theme-dark"' in html
     assert "prefers-color-scheme: dark" in html
-    assert 'class="page-title"' not in html
+    assert '<div class="page-title">Reader Page</div>' not in html
     assert '<h1 id="reader-page">Reader Page</h1>' in html
 
 
@@ -1255,10 +1355,36 @@ def test_bundled_templates_are_documented():
 def test_generated_styles_keep_toc_compact():
     from md2html.rendering import asset_css, jekyll_compat_css
 
-    for css in (asset_css("super-barebones.css"), asset_css("barebones.css"), asset_css("page.css"), jekyll_compat_css()):
-        assert ".table-of-contents { margin: 0 0 .8rem; padding: 0; font-size: .9rem; line-height: 1.2; }" in css
-        assert ".toc-list, .toc-list ul { margin: 0; padding-left: 1rem; }" in css
+    for css in (asset_css("feature-toc.css"), jekyll_compat_css()):
+        assert ".table-of-contents { margin: 0; padding: 0; font-size: .9rem; line-height: 1; }" in css
+        assert ".toc-list, .toc-list ul { margin: 0; padding-left: 20px; }" in css
+        assert ".toc-list ul { margin-bottom: 2px; }" in css
         assert ".toc-list li { margin-bottom: 2px; }" in css
+
+
+def test_generated_styles_contain_mobile_overflow():
+    from md2html.rendering import asset_css
+
+    page = asset_css("page.css")
+    barebones = asset_css("barebones.css")
+    math = asset_css("feature-math.css")
+
+    assert ".page-content a {\n  overflow-wrap: anywhere;\n}" in page
+    assert "padding: 1rem clamp(.625rem, 3vw, 1rem);" in page
+    assert ".page-content {\n  min-width: 0;\n  overflow-x: auto;" in page
+    assert '.page-content iframe[src*="youtube.com"]' in page
+    assert "aspect-ratio: 16 / 9;" in page
+    assert ".container { min-width: 0; overflow-x: auto;" in barebones
+    assert "padding: 1rem clamp(.625rem, 3vw, 1rem);" in barebones
+    assert ".container a { overflow-wrap: anywhere; }" in barebones
+    assert '.container iframe[src*="youtube.com"]' in barebones
+    assert ".math.display" in math
+    assert "overflow-x: auto;" in math
+    assert ".math.inline" in math
+    assert ".math.inline {\n  white-space: nowrap;\n}" in math
+    assert ".MathJax {\n  overflow-x: auto;\n  overflow-y: hidden;\n}" in math
+    assert "scrollbar-width" not in math
+    assert ".math.inline::-webkit-scrollbar" not in math
 
 
 def test_custom_template_embeds_companion_css(tmp_path: Path):

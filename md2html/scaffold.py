@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from .config import BuildOptions
-from .rendering import bundled_template_text, embedded_css_for_template
+from .rendering import ALL_FEATURES, bundled_template_text, embedded_css_for_template
 
 
 def example_config_json() -> str:
@@ -16,6 +16,7 @@ def example_config_json() -> str:
         "template_dirs": ["templates"],
         "template": "page.html",
         "css": None,
+        "feature_css": True,
         "copy_assets": True,
         "embed_assets": True,
         "execute": False,
@@ -52,7 +53,7 @@ def example_config_json() -> str:
 
 def example_layout_html() -> str:
     template = bundled_template_text("page.html")
-    css = embedded_css_for_template("page.html", BuildOptions())
+    css = embedded_css_for_template("page.html", BuildOptions(), features=ALL_FEATURES)
     dynamic_block = (
         "  {% if embedded_css %}<style>\n"
         "{{ embedded_css | safe }}\n"

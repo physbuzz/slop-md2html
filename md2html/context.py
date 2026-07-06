@@ -44,6 +44,9 @@ class BuildContext:
     def add_dependency(self, path: Path) -> None:
         self.dependencies.add(resolve_lenient(path))
 
+    def use_feature(self, name: str) -> None:
+        self.flags.add(name)
+
     def warn(self, message: str, *, path: Path | None = None, line: int | None = None) -> None:
         self.diagnostics.append(Diagnostic("warning", message, path, line))
 

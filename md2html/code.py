@@ -163,19 +163,25 @@ def render_source_embed_html(src: Path, ctx: BuildContext, directive: SrcDirecti
         message = f"source file not found: {directive.path}"
         if ctx.options.strict:
             raise DirectiveError(message)
+        ctx.use_feature("warning")
         ctx.warn(message, path=ctx.source_path)
         return f'<div class="md2html-warning">{html.escape(message)}</div>'
 
     ctx.add_dependency(src)
+    ctx.use_feature("code_box")
+    ctx.use_feature("code_highlight")
     code = src.read_text(encoding="utf-8")
     lang = directive.options.get("lang") or language_for_path(src)
     highlighted = highlight_code(code, lang, filename=str(src))
     output = _read_or_execute_output(src, ctx)
+    if output is not None:
+        ctx.use_feature("code_output")
     href = ctx.asset_url(directive.path, current_file=ctx.source_path)
     label = directive.options.get("caption") or directive.path
 
     header = f'<div class="code-header"><a href="{html.escape(href, quote=True)}">{html.escape(label)}</a></div>\n'
     if directive.collapsible:
+        ctx.use_feature("collapsible_code")
         open_attr = " open" if directive.expanded_by_default else ""
         code_html = (
             '<div class="code-box" markdown="1">\n'
@@ -198,7 +204,9 @@ def render_source_embed(src: Path, ctx: BuildContext, directive: SrcDirective) -
     return html_text.replace('<div class="code-box" markdown="1">', '<div class="code-box">')
 
 
-def render_inline_source(code: str, lang: str, flags: set[str]) -> str:
+def render_inline_source(code: str, lang: str, flags: set[str], ctx: BuildContext) -> str:
+    ctx.use_feature("code_box")
+    ctx.use_feature("code_highlight")
     highlighted = highlight_code(code, lang)
     extra = ""
     if "godbolt" in flags:
@@ -231,7 +239,7 @@ def expand_code_directives(text: str, ctx: BuildContext) -> str:
                 i += 1
             if i < len(lines) and lines[i].strip() == "@src-end":
                 i += 1
-            out.append(render_inline_source("\n".join(block) + "\n", lang, flags))
+            out.append(render_inline_source("\n".join(block) + "\n", lang, flags, ctx))
             continue
         out.append(lines[i])
         i += 1

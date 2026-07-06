@@ -11,7 +11,7 @@ The renderer pipeline is:
 5. Protect `$...$` and `$$...$$` math so Markdown formatting does not alter TeX.
 6. Expand `@src(...)` and `@src-begin(...)` code directives with syntax highlighting and optional execution.
 7. Render Markdown.
-8. Restore math spans and wrap the output in a template.
+8. Restore math spans and wrap the output in a template with the CSS and scripts needed by the page.
 
 ## Install And Test
 
@@ -97,7 +97,7 @@ md2html --example-layout
 
 - `--readme` prints this README and exits.
 - `--example-config [path]` writes a complete example config. The default path is `md2html.json`.
-- `--example-layout [path]` writes a single-file HTML layout with the default stylesheet inlined. The default path is `templates/page.html`.
+- `--example-layout [path]` writes a single-file HTML layout with the default page stylesheet and all bundled feature styles inlined. The default path is `templates/page.html`.
 - Pass `-` as the path to print either example to stdout.
 - Existing files are not overwritten unless `--force-rebuild` is also passed.
 
@@ -107,9 +107,9 @@ The generated layout is for md2html HTML output. For Jekyll output, use the `jek
 
 Bundled HTML templates live in `md2html/default_templates/` and are selected with the `template` config key or a page-level `template` front matter key:
 
-- `super-barebones.html`: A near-plain HTML document. Its paired CSS only covers md2html-generated features such as code boxes, `@toc`, warnings, math overflow, and images.
+- `super-barebones.html`: A near-plain HTML document. It has no page-level bundled CSS; md2html-generated feature CSS is still added when the page uses a styled feature.
 - `barebones.html`: The simple page template with the original centered white reading panel and no reader controls.
-- `page.html`: The default template. It includes an `Aa` reader control in the top right for theme, measure, and typeface preferences.
+- `page.html`: The default template. It keeps the centered reading-card layout and adds a small header with a page title plus an `Aa` reader control for theme, measure, and typeface preferences.
 
 Each bundled template has its own bundled CSS file:
 
@@ -119,9 +119,11 @@ barebones.html        ->  barebones.css
 page.html             ->  page.css
 ```
 
-When `embed_assets` is true, `embedded_css` contains syntax-highlighting CSS plus the CSS selected for the active template. For a custom template, md2html looks for a same-name companion CSS file in `template_dirs`; for example, `templates/report.html` automatically embeds `templates/report.css` when it exists.
+When `embed_assets` is true, `embedded_css` contains the selected template CSS plus automatic CSS for only the md2html features used by that page. Plain pages using `super-barebones.html` get no bundled CSS and no empty `<style>` block. Pages without math do not load MathJax. The bundled reading templates keep display math horizontally scrollable, wrap long links when needed, and constrain common embedded media on narrow screens.
 
-Override embedded CSS from config:
+For a custom template, md2html looks for a same-name companion CSS file in `template_dirs`; for example, `templates/report.html` automatically embeds `templates/report.css` when it exists.
+
+Override template CSS from config:
 
 ```json
 {
@@ -131,9 +133,37 @@ Override embedded CSS from config:
 }
 ```
 
-Use `"css": null` or omit the key to use the selected template's default CSS. Use `"css": []` to embed only syntax-highlighting CSS. When `embed_assets` is false, `stylesheets` are emitted as `<link>` tags instead.
+Use `"css": null` or omit the key to use the selected template's default CSS. Use `"css": []` to disable template CSS while keeping automatic feature CSS. Set `"feature_css": false` to disable automatic md2html feature CSS too. When `embed_assets` is false, `embedded_css` is empty and `stylesheets` are emitted as `<link>` tags instead.
 
-The default `page.html` template works with JavaScript disabled: it follows the system color scheme, uses normal width and sans-serif text by default, and still renders the page content and code blocks. In browsers with CSS `:has(...)` support, the visible radio controls can change theme, width, and typeface without JavaScript. The small script only persists settings and asks MathJax to re-typeset after a reader setting changes.
+Automatic feature CSS is keyed by these feature names:
+
+- `inline_code`: Markdown inline code spans.
+- `code_highlight`: Markdown fenced code blocks and highlighted source embeds.
+- `code_box`: `@src(...)` and `@src-begin(...)` source blocks.
+- `collapsible_code`: collapsible or collapsed `@src(...)` blocks.
+- `code_output`: cached or executed output attached to a source block.
+- `toc`: `@toc`.
+- `math`: `$...$` or `$$...$$` math spans.
+- `image`: Markdown images and Obsidian image embeds.
+- `obsidian_image`: Obsidian image embeds.
+- `warning`: md2html warning boxes, such as a missing source embed in non-strict mode.
+
+Template variables use Jinja syntax, but the variable contract is intentionally simple enough to read like Liquid:
+
+- `content`: rendered page body HTML.
+- `title`: front matter title, first `#` heading, or source filename.
+- `metadata` and `frontmatter`: page front matter.
+- `embedded_css`: inline CSS selected for this page.
+- `stylesheets`: stylesheet hrefs to emit as `<link>` tags.
+- `features`: sorted list of active feature names.
+- `uses`: dictionary of feature flags, such as `uses.math` or `uses.code_box`.
+- `use_mathjax`: true only when `math.backend` is `"mathjax"` and the page contains math.
+- `header_title`: front matter title when present, otherwise the source filename.
+- `source_name`: source filename.
+- `lang`: page language, defaulting to `en`.
+- `layout`: page layout metadata, defaulting to `post`.
+
+The default `page.html` template works with JavaScript disabled: it follows the system color scheme, uses normal width and sans-serif text by default, and still renders the page content and code blocks. In browsers with CSS `:has(...)` support, the visible radio controls can change theme, width, and typeface without JavaScript. The small script applies saved settings before CSS loads, persists reader settings, and asks MathJax to re-typeset after a reader setting changes.
 
 ## Configuration
 
@@ -155,6 +185,7 @@ A compact `md2html.json`:
   "recursive": true,
   "copy_assets": true,
   "embed_assets": true,
+  "feature_css": true,
   "execute": false,
   "images": {
     "class": "note-image",
@@ -183,17 +214,18 @@ The generated config points at `templates/page.html`, so those two commands work
 
 Canonical top-level keys:
 
-- `input`: Markdown file, directory, or list of files/directories to build. Aliases: `inputs`, `files`.
+- `input`: Markdown file, directory, or list of files/directories to build.
 - `output`: Output file for one input, or output directory for multiple inputs/directories.
 - `recursive`: Process directory inputs recursively.
-- `project_root`: Base directory for includes, source embeds, assets, and relative template directories. Alias: `root`.
-- `output_mode`: `"html"` or `"jekyll"`. Alias: `format`. The CLI `--format` option overrides this.
-- `template_dirs`: Additional template directories. Alias: `templates`.
+- `project_root`: Base directory for includes, source embeds, assets, and relative template directories.
+- `output_mode`: `"html"` or `"jekyll"`. The CLI `--format` option overrides this.
+- `template_dirs`: Additional template directories.
 - `template`: HTML template name for HTML output. Defaults to `page.html`.
 - `css`: Local CSS file or list of files to embed when `embed_assets` is true. `null` uses the selected template's default CSS.
+- `feature_css`: Include automatic CSS for md2html-generated features used by the page. Defaults to `true`.
 - `stylesheets`: Stylesheet links emitted when `embed_assets` is false.
 - `execute`: Run source files for `@src(...)` when their output files are missing or stale.
-- `embed_assets`: Embed bundled CSS in HTML output. Alias: `embed_styles`.
+- `embed_assets`: Embed selected CSS in HTML output.
 - `copy_assets`: Copy referenced local assets next to generated pages.
 - `no_overwrite`: Skip writes when an output file already exists.
 - `force_rebuild`: Rebuild even when outputs or source execution results appear current.
@@ -232,10 +264,10 @@ Nested keys:
 ```
 
 - `math.backend`: Math renderer used by HTML output. The bundled template includes browser-side math rendering when this is `"mathjax"` and otherwise emits md2html math wrappers without loading a renderer.
-- `images.class`: Default CSS class added to Obsidian image embeds. Alias: `class_name`. The alternate section name `obsidian_images` is also accepted.
+- `images.class`: Default CSS class added to Obsidian image embeds.
 - `images.width`: Default width for Obsidian image embeds.
 - `code.commands`: Execution commands by file extension or language. Commands may use `{src}` for the source path and `{stem}` for the source path without its suffix.
-- `code.timeout`: Execution timeout in seconds. A top-level `timeout` key is also accepted.
+- `code.timeout`: Execution timeout in seconds.
 - `code.output_suffix`: Sibling output file suffix for source execution and cached output embedding.
 - `jekyll.math`: `"passthrough"` keeps `$...$` and `$$...$$` in generated Markdown. `"html"` emits the same math wrappers as HTML output.
 - `jekyll.layout`: Default layout for pages without a `layout` front matter key. Use `null` to omit it.

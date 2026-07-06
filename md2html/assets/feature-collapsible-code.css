@@ -1,0 +1,50 @@
+.collapsible-code {
+  border: none;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.code-summary {
+  font-family: var(--md2html-mono-font, ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace);
+  font-size: .75rem;
+  color: var(--md2html-muted, currentColor);
+  background-color: var(--md2html-code-header-bg, transparent);
+  padding: .5rem .8rem;
+  border-bottom: 1px solid var(--md2html-border, currentColor);
+  cursor: pointer;
+  list-style: none;
+  display: block;
+  position: relative;
+  transition: background-color .1s ease-in-out;
+}
+.code-summary::-webkit-details-marker {
+  display: none;
+}
+.code-summary::before {
+  content: ">";
+  position: absolute;
+  left: .8rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: .6em;
+  color: var(--md2html-muted, currentColor);
+  margin-right: .5rem;
+  transition: transform .2s ease-in-out;
+}
+.collapsible-code[open] > .code-summary::before {
+  transform: translateY(-50%) rotate(90deg);
+}
+.code-summary a {
+  margin-left: 1.2rem;
+  color: var(--md2html-muted, currentColor);
+  text-decoration: none;
+}
+.code-summary a:hover {
+  color: var(--md2html-link, var(--md2html-muted, currentColor));
+  text-decoration: underline;
+}
+.expand-hint {
+  font-style: italic;
+  font-size: .85em;
+  color: var(--md2html-muted, currentColor);
+  margin-left: .5rem;
+}

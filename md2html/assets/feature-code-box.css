@@ -1,0 +1,31 @@
+.code-box {
+  background-color: var(--md2html-code-bg, transparent);
+  border: 1px solid var(--md2html-border, currentColor);
+  border-radius: var(--md2html-radius, 0);
+  overflow: hidden;
+  margin: 1rem 0 1.5rem;
+}
+.code-box .codehilite {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+.code-box .codehilite pre {
+  padding: .2rem 0 .3rem .3rem;
+}
+.code-header {
+  font-family: var(--md2html-mono-font, ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace);
+  font-size: .75rem;
+  color: var(--md2html-muted, currentColor);
+  background-color: var(--md2html-code-header-bg, transparent);
+  padding: .3rem 0 0 .3rem;
+  border-bottom: 1px solid var(--md2html-border, currentColor);
+}
+.code-header a {
+  color: var(--md2html-muted, currentColor);
+  text-decoration: none;
+}
+.code-header a:hover {
+  color: var(--md2html-link, var(--md2html-muted, currentColor));
+  text-decoration: underline;
+}

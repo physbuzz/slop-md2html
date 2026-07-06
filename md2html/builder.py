@@ -14,6 +14,7 @@ from .frontmatter import split_frontmatter
 from .graph import build_dependency_graph
 from .rendering import (
     TocHeading,
+    has_toc_marker,
     jekyll_compat_css,
     plain_text,
     prepare_toc,
@@ -42,6 +43,7 @@ class BuildResult:
     diagnostics: list[Diagnostic] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     headings: list[TocHeading] = field(default_factory=list)
+    features: set[str] = field(default_factory=set)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +56,7 @@ class BuildResult:
             "diagnostics": [d.format() for d in self.diagnostics],
             "metadata": self.metadata,
             "headings": [{"level": h.level, "title": h.text, "id": h.id, "line": h.line} for h in self.headings],
+            "features": sorted(self.features),
         }
 
 
@@ -90,11 +93,16 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
         body = process_obsidian_images_markdown(body, ctx, current_file=ctx.source_path)
     else:
         body = process_obsidian_images(body, ctx, current_file=ctx.source_path)
+    uses_toc = has_toc_marker(body)
     body, headings, _toc = prepare_toc(body, output_mode=ctx.options.output_mode)
+    if uses_toc:
+        ctx.use_feature("toc")
     # Titles are plain text, so extract before math protection replaces TeX
     # spans with placeholders.
     title = str(metadata.get("title") or _first_heading_title(body) or ctx.source_path.name)
     body, math_spans = protect_math(body)
+    if math_spans:
+        ctx.use_feature("math")
     if ctx.options.output_mode == "jekyll":
         body = preserve_escaped_dollars_markdown(body)
     body = expand_code_directives(body, ctx)
@@ -123,6 +131,8 @@ def render_markdown_document(source_text: str, ctx: BuildContext) -> tuple[str, 
         metadata=metadata,
         options=ctx.options,
         template_name=metadata.get("template"),
+        features=ctx.flags,
+        source_name=ctx.source_path.name,
     )
     return document, metadata, headings
 
@@ -159,6 +169,7 @@ class MarkdownSiteBuilder:
             diagnostics=list(ctx.diagnostics),
             metadata=dict(metadata),
             headings=headings,
+            features=set(ctx.flags),
         )
         if dry_run:
             return result

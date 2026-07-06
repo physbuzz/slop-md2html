@@ -51,6 +51,7 @@ class BuildOptions:
     template: str = "page.html"
     css: list[str] | None = None
     stylesheets: list[str] = field(default_factory=list)
+    feature_css: bool = True
     output_mode: str = "html"  # html or jekyll
     math: MathConfig = field(default_factory=MathConfig)
     jekyll: JekyllConfig = field(default_factory=JekyllConfig)
@@ -96,18 +97,18 @@ def _string_list(value: Any) -> list[str]:
 
 def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> BuildOptions:
     cwd = cwd or Path.cwd()
-    project_root = Path(data.get("project_root", data.get("root", cwd))).expanduser()
+    project_root = Path(data.get("project_root", cwd)).expanduser()
     if not project_root.is_absolute():
         project_root = (cwd / project_root).resolve()
 
     template_dirs = []
-    for raw in data.get("template_dirs", data.get("templates", [])) or []:
+    for raw in data.get("template_dirs", []) or []:
         p = Path(raw).expanduser()
         template_dirs.append(p if p.is_absolute() else (project_root / p))
 
     math_data = data.get("math", {}) or {}
     code_data = data.get("code", {}) or {}
-    image_data = data.get("images", data.get("obsidian_images", {})) or {}
+    image_data = data.get("images", {}) or {}
     jekyll_data = data.get("jekyll", {}) or {}
 
     return BuildOptions(
@@ -116,9 +117,10 @@ def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> Bu
         template=data.get("template", "page.html"),
         css=_string_list(data["css"]) if data.get("css") is not None else None,
         stylesheets=_string_list(data.get("stylesheets", [])),
-        output_mode=data.get("output_mode", data.get("format", "html")),
+        feature_css=bool(data.get("feature_css", True)),
+        output_mode=data.get("output_mode", "html"),
         math=MathConfig(
-            backend=math_data.get("backend", data.get("math_backend", "mathjax")),
+            backend=math_data.get("backend", "mathjax"),
         ),
         jekyll=JekyllConfig(
             math=jekyll_data.get("math", "passthrough"),
@@ -129,15 +131,15 @@ def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> Bu
         ),
         code=CodeConfig(
             commands=code_data.get("commands", {}),
-            timeout=float(code_data.get("timeout", data.get("timeout", 15.0))),
+            timeout=float(code_data.get("timeout", 15.0)),
             output_suffix=code_data.get("output_suffix", ".out"),
         ),
         images=ImageConfig(
-            class_name=image_data.get("class", image_data.get("class_name")),
+            class_name=image_data.get("class"),
             width=image_data.get("width"),
         ),
         execute=bool(data.get("execute", False)),
-        embed_assets=bool(data.get("embed_assets", data.get("embed_styles", True))),
+        embed_assets=bool(data.get("embed_assets", True)),
         copy_assets=bool(data.get("copy_assets", True)),
         no_overwrite=bool(data.get("no_overwrite", False)),
         force_rebuild=bool(data.get("force_rebuild", False)),
