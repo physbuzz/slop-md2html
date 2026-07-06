@@ -444,6 +444,8 @@ def test_config_keys_and_defaults_are_sensible(tmp_path: Path):
                 "commands": {"py": "python {src}"},
                 "timeout": 6,
                 "output_suffix": ".run",
+                "highlight_style": "friendly",
+                "highlight_dark_style": "native",
             },
             "jekyll": {
                 "math": "html",
@@ -465,6 +467,8 @@ def test_config_keys_and_defaults_are_sensible(tmp_path: Path):
     assert options.math.backend == "mathjax"
     assert options.code.timeout == 6
     assert options.code.output_suffix == ".run"
+    assert options.code.highlight_style == "friendly"
+    assert options.code.highlight_dark_style == "native"
     assert options.embed_assets is False
     assert options.images.class_name == "figure"
     assert options.images.width == "75%"
@@ -940,6 +944,8 @@ def test_example_config_command_writes_default_file(monkeypatch, capsys, tmp_pat
     assert data["feature_css"] is True
     assert data["math"] == {"backend": "mathjax"}
     assert data["code"]["commands"]["wl"] == "wolframscript -file {src}"
+    assert data["code"]["highlight_style"] == "default"
+    assert data["code"]["highlight_dark_style"] == "github-dark"
     assert data["jekyll"]["frontmatter"] == {"render_with_liquid": False}
 
 
@@ -1371,11 +1377,16 @@ def test_generated_styles_contain_mobile_overflow():
 
     assert ".page-content a {\n  overflow-wrap: anywhere;\n}" in page
     assert "padding: 1rem clamp(.625rem, 3vw, 1rem);" in page
+    assert "@media (max-width: 700px), (hover: none) and (pointer: coarse) and (max-width: 1000px)" in page
+    assert "border-left-width: 2px;" in page
+    assert "padding: 0 .65rem;" in page
     assert ".page-content {\n  min-width: 0;\n  overflow-x: auto;" in page
     assert '.page-content iframe[src*="youtube.com"]' in page
     assert "aspect-ratio: 16 / 9;" in page
     assert ".container { min-width: 0; overflow-x: auto;" in barebones
     assert "padding: 1rem clamp(.625rem, 3vw, 1rem);" in barebones
+    assert "@media (max-width: 700px), (hover: none) and (pointer: coarse) and (max-width: 1000px)" in barebones
+    assert "blockquote { border-left-width: 2px; margin: .8rem 0 1rem; padding: .55rem .65rem; }" in barebones
     assert ".container a { overflow-wrap: anywhere; }" in barebones
     assert '.container iframe[src*="youtube.com"]' in barebones
     assert ".math.display" in math
@@ -1385,6 +1396,43 @@ def test_generated_styles_contain_mobile_overflow():
     assert ".MathJax {\n  overflow-x: auto;\n  overflow-y: hidden;\n}" in math
     assert "scrollbar-width" not in math
     assert ".math.inline::-webkit-scrollbar" not in math
+
+
+def test_reading_templates_keep_moderate_vertical_rhythm():
+    from md2html.rendering import asset_css
+
+    page = asset_css("page.css")
+    barebones = asset_css("barebones.css")
+    math = asset_css("feature-math.css")
+
+    for css in (page, barebones):
+        assert "line-height: 1.55;" in css
+        assert "margin: 1.55rem 0 .7rem;" in css
+        assert "margin: 1.35rem 0 .65rem;" in css
+        assert "margin: 0 0 .85rem;" in css
+        assert "margin-bottom: .3rem;" in css
+    assert "margin: .65rem 0;" in math
+
+
+def test_pygments_css_includes_configurable_dark_style():
+    from md2html.config import BuildOptions
+    from md2html.rendering import pygments_css
+    from md2html.rendering import embedded_css_for_template
+
+    css = pygments_css("default", "github-dark")
+
+    assert 'html[data-theme="dark"] .codehilite' in css
+    assert "@media (prefers-color-scheme: dark)" in css
+    assert ":has(" not in css
+    assert "#0d1117" in css
+    assert "td.linenos .normal { color: #6e7681; background-color: #0d1117" not in css
+
+    light_only = pygments_css("default", None)
+    assert "prefers-color-scheme" not in light_only
+    assert 'html[data-theme="dark"] .codehilite' not in light_only
+
+    full_css = embedded_css_for_template("page.html", BuildOptions(), features={"code_highlight"})
+    assert full_css.count(":has(") == 6
 
 
 def test_custom_template_embeds_companion_css(tmp_path: Path):

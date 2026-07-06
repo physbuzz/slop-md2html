@@ -3,7 +3,7 @@
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  margin: 1rem 0;
+  margin: .65rem 0;
 }
 .math.inline {
   white-space: nowrap;

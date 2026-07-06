@@ -37,6 +37,8 @@ def example_config_json() -> str:
             },
             "timeout": 15,
             "output_suffix": ".out",
+            "highlight_style": "default",
+            "highlight_dark_style": "github-dark",
         },
         "jekyll": {
             "math": "passthrough",

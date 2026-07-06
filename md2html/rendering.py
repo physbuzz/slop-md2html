@@ -542,42 +542,60 @@ def render_fenced_code_blocks(markdown_text: str) -> str:
     return "".join(out)
 
 
-def pygments_css(style: str = "default") -> str:
-    return HtmlFormatter(style=style, cssclass="codehilite").get_style_defs(".codehilite")
+def _indent_css(css: str) -> str:
+    return "\n".join(f"  {line}" if line else "" for line in css.splitlines())
 
 
-def jekyll_compat_css() -> str:
-    return pygments_css() + "\n\n" + "\n".join(
-        [
-            ".codehilite { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; margin: 1rem 0 1.5rem; overflow-x: auto; }",
-            ".codehilite pre { margin: 0; padding: 1rem; overflow-x: auto; }",
-            ".codehilite code { padding: 0; background: transparent; }",
-            ".code-box { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; overflow: hidden; margin: 1rem 0 1.5rem; }",
-            ".code-box .codehilite { margin: 0; border: none; border-radius: 0; }",
-            ".code-box .codehilite pre { padding: .25rem .4rem .35rem; }",
-            ".code-header, .code-summary, .code-output { font-family: SFMono-Regular, Consolas, \"Liberation Mono\", Menlo, monospace; font-size: .75rem; color: #6a737d; background: #fafbfc; }",
-            ".code-header { padding: .3rem .4rem; border-bottom: 1px solid #e1e4e8; }",
-            ".code-output { padding: .3rem .4rem; border-top: 1px solid #e1e4e8; }",
-            ".code-output pre { margin: .25rem 0 0; white-space: pre-wrap; }",
-            ".code-output span { color: #aa2da5; }",
-            ".collapsible-code { border: none; margin: 0; }",
-            ".code-summary { padding: .5rem .8rem .5rem 2rem; border-bottom: 1px solid #e1e4e8; cursor: pointer; list-style: none; position: relative; }",
-            ".code-summary::before { content: '►'; position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); font-size: .7em; transition: transform .15s ease; }",
-            ".collapsible-code[open] > .code-summary::before { transform: translateY(-50%) rotate(90deg); }",
-            ".expand-hint { font-style: italic; color: #888; margin-left: .5rem; }",
-            ".table-of-contents { margin: 0; padding: 0; font-size: .9rem; line-height: 1; }",
-            ".table-of-contents h2 { margin: 0 0 .25rem; font-size: 1.1rem; }",
-            ".toc-list, .toc-list ul { margin: 0; padding-left: 20px; }",
-            ".toc-list ul { margin-bottom: 2px; }",
-            ".toc-list li { margin-bottom: 2px; }",
-            ".exercise-container { display: inline-block; margin-top: 2px; line-height: 1.2; }",
-            ".exercise-list { display: inline; margin: 0; padding-left: 0; font-size: .95em; }",
-            ".exercise-list span:not(:last-child)::after { content: ', '; color: #777; }",
-            ".toc-exercises { font-style: italic; color: #555; }",
-            ".obsidian-image { display: block; margin: 1rem auto; }",
-            ".md2html-warning { border-left: 4px solid #d29922; background: #fff8c5; padding: .75rem 1rem; margin: 1rem 0; }",
-        ]
-    ) + "\n"
+def _scoped_pygments_css(style: str, selector: str) -> str:
+    css = HtmlFormatter(style=style, cssclass="codehilite").get_style_defs(selector)
+    return "\n".join(line for line in css.splitlines() if selector in line)
+
+
+def pygments_css(style: str = "default", dark_style: str | None = "github-dark") -> str:
+    parts = [HtmlFormatter(style=style, cssclass="codehilite").get_style_defs(".codehilite")]
+    if dark_style:
+        parts.append(_scoped_pygments_css(dark_style, 'html[data-theme="dark"] .codehilite'))
+        media_selector = 'html:not([data-theme="light"]) .codehilite'
+        parts.append(
+            "@media (prefers-color-scheme: dark) {\n"
+            + _indent_css(_scoped_pygments_css(dark_style, media_selector))
+            + "\n}"
+        )
+    return "\n\n".join(part.rstrip() for part in parts if part.strip())
+
+
+def jekyll_compat_css(options: BuildOptions | None = None) -> str:
+    options = options or BuildOptions()
+    compat_rules = [
+        ".codehilite { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; margin: 1rem 0 1.5rem; overflow-x: auto; }",
+        ".codehilite pre { margin: 0; padding: 1rem; overflow-x: auto; }",
+        ".codehilite code { padding: 0; background: transparent; }",
+        ".code-box { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; overflow: hidden; margin: 1rem 0 1.5rem; }",
+        ".code-box .codehilite { margin: 0; border: none; border-radius: 0; }",
+        ".code-box .codehilite pre { padding: .25rem .4rem .35rem; }",
+        ".code-header, .code-summary, .code-output { font-family: SFMono-Regular, Consolas, \"Liberation Mono\", Menlo, monospace; font-size: .75rem; color: #6a737d; background: #fafbfc; }",
+        ".code-header { padding: .3rem .4rem; border-bottom: 1px solid #e1e4e8; }",
+        ".code-output { padding: .3rem .4rem; border-top: 1px solid #e1e4e8; }",
+        ".code-output pre { margin: .25rem 0 0; white-space: pre-wrap; }",
+        ".code-output span { color: #aa2da5; }",
+        ".collapsible-code { border: none; margin: 0; }",
+        ".code-summary { padding: .5rem .8rem .5rem 2rem; border-bottom: 1px solid #e1e4e8; cursor: pointer; list-style: none; position: relative; }",
+        ".code-summary::before { content: '►'; position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); font-size: .7em; transition: transform .15s ease; }",
+        ".collapsible-code[open] > .code-summary::before { transform: translateY(-50%) rotate(90deg); }",
+        ".expand-hint { font-style: italic; color: #888; margin-left: .5rem; }",
+        ".table-of-contents { margin: 0; padding: 0; font-size: .9rem; line-height: 1; }",
+        ".table-of-contents h2 { margin: 0 0 .25rem; font-size: 1.1rem; }",
+        ".toc-list, .toc-list ul { margin: 0; padding-left: 20px; }",
+        ".toc-list ul { margin-bottom: 2px; }",
+        ".toc-list li { margin-bottom: 2px; }",
+        ".exercise-container { display: inline-block; margin-top: 2px; line-height: 1.2; }",
+        ".exercise-list { display: inline; margin: 0; padding-left: 0; font-size: .95em; }",
+        ".exercise-list span:not(:last-child)::after { content: ', '; color: #777; }",
+        ".toc-exercises { font-style: italic; color: #555; }",
+        ".obsidian-image { display: block; margin: 1rem auto; }",
+        ".md2html-warning { border-left: 4px solid #d29922; background: #fff8c5; padding: .75rem 1rem; margin: 1rem 0; }",
+    ]
+    return pygments_css(options.code.highlight_style, options.code.highlight_dark_style) + "\n\n" + "\n".join(compat_rules) + "\n"
 
 
 class Md2HtmlRenderer(mistune.HTMLRenderer):
@@ -680,10 +698,10 @@ def _read_css_ref(ref: str | Path, options: BuildOptions) -> str:
     raise FileNotFoundError(f"CSS file does not exist: {ref}")
 
 
-def _feature_css(features: set[str]) -> list[str]:
+def _feature_css(features: set[str], options: BuildOptions) -> list[str]:
     parts: list[str] = []
     if "code_highlight" in features:
-        parts.append(pygments_css())
+        parts.append(pygments_css(options.code.highlight_style, options.code.highlight_dark_style))
     for feature, css_name in _FEATURE_CSS.items():
         if feature in features:
             parts.append(asset_css(css_name))
@@ -700,7 +718,7 @@ def embedded_css_for_template(
     active_features = set(features or ())
     parts = [_read_css_ref(ref, options) for ref in _configured_css_refs(metadata, options, template_name)]
     if options.feature_css:
-        parts.extend(_feature_css(active_features))
+        parts.extend(_feature_css(active_features, options))
     body = "\n\n".join(part.rstrip() for part in parts if part.strip())
     return body + "\n" if body else ""
 

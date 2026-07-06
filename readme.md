@@ -249,7 +249,9 @@ Nested keys:
       "rkt": "racket {src}"
     },
     "timeout": 15,
-    "output_suffix": ".out"
+    "output_suffix": ".out",
+    "highlight_style": "default",
+    "highlight_dark_style": "github-dark"
   },
   "jekyll": {
     "math": "passthrough",
@@ -269,6 +271,8 @@ Nested keys:
 - `code.commands`: Execution commands by file extension or language. Commands may use `{src}` for the source path and `{stem}` for the source path without its suffix.
 - `code.timeout`: Execution timeout in seconds.
 - `code.output_suffix`: Sibling output file suffix for source execution and cached output embedding.
+- `code.highlight_style`: Pygments style name for light syntax highlighting.
+- `code.highlight_dark_style`: Pygments style name for dark syntax highlighting. Use `null` to omit dark token CSS.
 - `jekyll.math`: `"passthrough"` keeps `$...$` and `$$...$$` in generated Markdown. `"html"` emits the same math wrappers as HTML output.
 - `jekyll.layout`: Default layout for pages without a `layout` front matter key. Use `null` to omit it.
 - `jekyll.stylesheet`: Generated stylesheet path relative to the output root. Use `null` to skip writing it.

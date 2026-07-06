@@ -184,7 +184,7 @@ class MarkdownSiteBuilder:
             return
         stylesheet = output_root / self.options.jekyll.stylesheet
         stylesheet.parent.mkdir(parents=True, exist_ok=True)
-        stylesheet.write_text(jekyll_compat_css(), encoding="utf-8")
+        stylesheet.write_text(jekyll_compat_css(self.options), encoding="utf-8")
 
     def dry_run_json(self, jobs: list[tuple[Path, Path]]) -> str:
         graph = build_dependency_graph(jobs, self.options)

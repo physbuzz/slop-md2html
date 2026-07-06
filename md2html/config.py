@@ -36,6 +36,8 @@ class CodeConfig:
     commands: dict[str, Any] = field(default_factory=dict)
     timeout: float = 15.0
     output_suffix: str = ".out"
+    highlight_style: str = "default"
+    highlight_dark_style: str | None = "github-dark"
 
 
 @dataclass
@@ -133,6 +135,8 @@ def options_from_mapping(data: dict[str, Any], *, cwd: Path | None = None) -> Bu
             commands=code_data.get("commands", {}),
             timeout=float(code_data.get("timeout", 15.0)),
             output_suffix=code_data.get("output_suffix", ".out"),
+            highlight_style=code_data.get("highlight_style", "default"),
+            highlight_dark_style=code_data.get("highlight_dark_style", "github-dark"),
         ),
         images=ImageConfig(
             class_name=image_data.get("class"),

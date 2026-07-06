@@ -119,7 +119,7 @@ body {
   background: var(--reader-page-bg);
   color: var(--reader-text);
   font-family: var(--reader-body-font);
-  line-height: 1.6;
+  line-height: 1.55;
 }
 
 .container {
@@ -238,10 +238,7 @@ body {
 
 .page-content p,
 .page-content li,
-.page-content blockquote,
-.page-content td,
-.page-content th {
-  min-width: 0;
+.page-content blockquote {
   overflow-wrap: break-word;
 }
 
@@ -294,48 +291,48 @@ body {
 
 h1 {
   font-size: 2.2rem;
-  margin: 0 0 1.5rem;
+  margin: 0 0 1.25rem;
   color: var(--reader-heading);
   border-bottom: 2px solid var(--reader-rule);
-  padding-bottom: .5rem;
+  padding-bottom: .4rem;
 }
 
 h2 {
   font-size: 1.8rem;
-  margin: 2rem 0 1rem;
+  margin: 1.55rem 0 .7rem;
   color: var(--reader-subheading);
 }
 
 h3 {
   font-size: 1.5rem;
-  margin: 1.8rem 0 1rem;
+  margin: 1.35rem 0 .65rem;
   color: var(--reader-subheading);
 }
 
 h4 {
   font-size: 1.3rem;
-  margin: 1.5rem 0 .8rem;
+  margin: 1.1rem 0 .5rem;
   color: var(--reader-subheading);
 }
 
 h5 {
   font-size: 1.1rem;
-  margin: 1.2rem 0 .8rem;
+  margin: .95rem 0 .45rem;
   color: var(--reader-subheading);
 }
 
 p {
-  margin: 0 0 1rem;
+  margin: 0 0 .85rem;
 }
 
 ul,
 ol {
-  margin: 0 0 1rem;
+  margin: 0 0 .85rem;
   padding-left: 2.5rem;
 }
 
 li {
-  margin-bottom: .5rem;
+  margin-bottom: .3rem;
 }
 
 a {
@@ -369,13 +366,26 @@ blockquote p:last-child {
   margin-bottom: 0;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (hover: none) and (pointer: coarse) and (max-width: 1000px) {
   .container {
+    max-width: none;
     margin: 0;
     padding: 1rem clamp(.625rem, 3vw, 1rem);
     border-radius: 0;
   }
 
+  blockquote {
+    border-left-width: 2px;
+    margin: .8rem 0 1rem;
+    padding: 0 .65rem;
+  }
+
+  blockquote p {
+    padding: .55rem 0;
+  }
+}
+
+@media (max-width: 700px) {
   .nav {
     flex-direction: column;
   }
