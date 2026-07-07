@@ -8,10 +8,15 @@
 
 The reason for making Yet Another Static Website Generator is to add some creature comforts and the ability to execute code snippets (which is handy if, say, you're solving 200 problems in a textbook and so have 200 short C++ or Racket files to run) if the `--execute` flag is enabled. There are also the directives `@toc` for printing a table of contents, `@include` for including other markdown, `![[foo.png]]` for Obsidian-style image embeds, and `@src(file.cpp, collapsed)` for a collapsed code snippet box that shows the `stdout` of `file.cpp`!
 
+Basically, if I'm solving problems in SICP or Knuth I do `md2html -erf knuth -o html --watch` and can see my solutions update in real-time as I write. If I write a math note then (because mathb.in got flooded with spam) I just do `md2html note.md && upload note.html`. 
 
-Each page is built in a fixed order: parse front matter, expand `@include` recursively, convert Obsidian image embeds, replace `@toc` with a heading directory, protect `$...$` and `$$...$$` math so Markdown does not alter LaTeX, expand `@src` code directives, render Markdown, then restore the math and wrap the result in a template with the CSS and scripts the page needs.
+TODO features are: extended Jekyll support (to fully support building simple jekyll sites), allowing execution on `@src-begin(cpp) ... @src-end` code fences, 
+rendering LaTeX to mathml or svg, and more extensive compatibility testing of 
+the default templates.
 
 ## Quick Orientation
+
+Each page is built in a fixed order: parse front matter, expand `@include` recursively, convert Obsidian image embeds, replace `@toc` with a heading directory, protect `$...$` and `$$...$$` math so Markdown does not alter LaTeX, expand `@src` code directives, render Markdown, then restore the math and wrap the result in a template with the CSS and scripts the page needs.
 
 Docs and this readme can be printed to the CLI using the following commands.
 
