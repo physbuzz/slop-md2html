@@ -1,9 +1,13 @@
+> [!NOTE]
+> This was made with ChatGPT 5.5 and some Fable 5. 
+
 # md2html
 
 `md2html` turns Markdown notes into standalone HTML pages or Jekyll-ready Markdown. It's aimed at quick math notes, so on my personal computer I can do 
 `md2html notes.md && upload notes.html` and have a shareable link to a beautiful standalone webpage ready.
 
 The reason for making Yet Another Static Website Generator is to add some creature comforts and the ability to execute code snippets (which is handy if, say, you're solving 200 problems in a textbook and so have 200 short C++ or Racket files to run) if the `--execute` flag is enabled. There are also the directives `@toc` for printing a table of contents, `@include` for including other markdown, `![[foo.png]]` for Obsidian-style image embeds, and `@src(file.cpp, collapsed)` for a collapsed code snippet box that shows the `stdout` of `file.cpp`!
+
 
 Each page is built in a fixed order: parse front matter, expand `@include` recursively, convert Obsidian image embeds, replace `@toc` with a heading directory, protect `$...$` and `$$...$$` math so Markdown does not alter LaTeX, expand `@src` code directives, render Markdown, then restore the math and wrap the result in a template with the CSS and scripts the page needs.
 
