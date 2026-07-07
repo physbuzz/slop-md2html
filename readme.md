@@ -1,19 +1,21 @@
 # md2html
 
-`md2html` is a small Python page builder for Markdown notes that need protected TeX math, Obsidian image embeds, recursive includes, compact exercise-aware tables of contents, source-code embedding, optional source execution, and static-site output.
+`md2html` turns Markdown notes into standalone HTML pages or Jekyll-ready Markdown. It is aimed at notes that use TeX math, `@toc`, `@include`, Obsidian-style image embeds, and source-code snippets with optional execution.
 
-The renderer pipeline is:
+Each page is built in a fixed order: parse front matter, expand `@include` recursively, convert Obsidian image embeds, replace `@toc` with a heading directory, protect `$...$` and `$$...$$` math so Markdown does not alter TeX, expand `@src` code directives, render Markdown, then restore the math and wrap the result in a template with the CSS and scripts the page needs.
 
-1. Parse YAML front matter.
-2. Expand `@include(path)` recursively with dependency tracking and circular-include detection.
-3. Convert Obsidian image embeds such as `![[img/diagram.svg|width=70%|class=center]]`.
-4. Scan headings, generate stable slugs, and replace `@toc` with a compact directory.
-5. Protect `$...$` and `$$...$$` math so Markdown formatting does not alter TeX.
-6. Expand `@src(...)` and `@src-begin(...)` code directives with syntax highlighting and optional execution.
-7. Render Markdown.
-8. Restore math spans and wrap the output in a template with the CSS and scripts needed by the page.
+## Quick Orientation
 
-## Install And Test
+Docs and this readme can be printed to the CLI using the following commands.
+
+```bash
+md2html -h                  # all CLI options
+md2html --readme            # print this README
+md2html --example-config -  # print a complete starter config to stdout
+md2html --example-layout -  # print the default single-file HTML layout to stdout
+```
+
+## Install
 
 Install for local use:
 
@@ -39,158 +41,65 @@ Build a single-file executable and copy it to `~/.local/bin/md2html`:
 make install
 ```
 
-The executable build bundles the default templates and CSS so output works the same from an installed package or a local source checkout.
-
-## Project Layout
-
-```text
-md2html/   importable package and bundled runtime assets
-tests/     test suite
-examples/  demo Markdown, demo code, and rendered sample output
-```
-
-Rendered demos live in `examples/rendered/` so generated HTML does not sit beside package source.
-
-The main package boundaries are:
-
-```text
-builder.py      document build orchestration and public result objects
-cli.py          argument parsing, source discovery, and job planning
-config.py       typed build options and config-file loading
-context.py      per-build dependencies, diagnostics, assets, and path lookup
-directives.py   shared @include/@src parsing plus include expansion
-code.py         source embedding and optional source execution
-graph.py        article-level dependency graph for dry-run/watch
-rendering.py    Markdown rendering, TOC, slugs, math, images, highlighting, templates
-paths.py        shared lenient path resolution and source-output paths
-watch.py        rebuild loop and development server
-```
-
-## CLI Examples
+## CLI
 
 ```bash
-md2html note.md
-md2html note.md -o index.html
-md2html --override-template barebones.html note.md -o note-barebones.html
-md2html file1.md file2.md -o html/
+# Generate test.html with the default template and inlined CSS.
+md2html test.md
+
+# Generate index.html instead.
+md2html test.md -o index.html
+
+# Build every Markdown file under src/ into html/.
 md2html -r src -o html
+
+# Execute @src blocks, force fresh outputs, watch for edits, and serve html/.
+md2html -erf src -o html --watch
+
+# Serve a generated site while rebuilding on change.
 md2html -r . -o _site --serve
-md2html note.md --dry-run
-md2html note.md --format jekyll
-md2html note.md --execute
+
+# Build Jekyll-ready Markdown instead of HTML.
+md2html -r src --format jekyll -o jekyll
+
+# Preview the build plan without writing files.
+md2html test.md --dry-run
+
+# Use a different HTML template for one run.
+md2html --override-template barebones.html test.md -o test-barebones.html
+
+# Use settings from another config file.
 md2html --config path/to/md2html.json
-md2html --readme
-md2html --example-config
-md2html --example-layout
 ```
+
+With one input and no `-o`, output is written beside the source with an `.html` suffix. With one input and `-o page.html`, that file is used. With several inputs, or a directory input and `-o html`, relative source paths are preserved under the output directory.
+
+`--watch` and `--serve` both start a local server and rebuild when watched files change. `-erf` is the short form of `--execute --recursive --force-rebuild`.
+
+## Config
 
 `md2html` reads `./md2html.json` automatically when it exists. Use `--config path/to/md2html.json` to pass a different file. Relative `input`, `output`, `project_root`, and template paths inside a config file are resolved from that config file's directory.
 
-## Self-Contained Help
-
-These commands are intended for people and tools that have the executable but not the repository open:
-
-```bash
-md2html --readme
-md2html --example-config
-md2html --example-layout
-```
-
-- `--readme` prints this README and exits.
-- `--example-config [path]` writes a complete example config. The default path is `md2html.json`.
-- `--example-layout [path]` writes a single-file HTML layout with the default page stylesheet and all bundled feature styles inlined. The default path is `templates/page.html`.
-- Pass `-` as the path to print either example to stdout.
-- Existing files are not overwritten unless `--force-rebuild` is also passed.
-
-The generated layout is for md2html HTML output. For Jekyll output, use the `jekyll` config section to set front matter defaults such as `layout`, and customize your Jekyll site's layouts normally.
-
-## HTML Templates
-
-Bundled HTML templates live in `md2html/default_templates/` and are selected with `--override-template`, the `template` config key, or a page-level `template` front matter key:
-
-- `super-barebones.html`: A near-plain HTML document. It has no page-level bundled CSS; md2html-generated feature CSS is still added when the page uses a styled feature.
-- `barebones.html`: The simple page template with the original centered white reading panel and no reader controls.
-- `page.html`: The default template. It keeps the centered reading-card layout and adds a small header with a page title plus an `Aa` reader control for theme, measure, and typeface preferences.
-
-Each bundled template has its own bundled CSS file:
-
-```text
-super-barebones.html  ->  super-barebones.css
-barebones.html        ->  barebones.css
-page.html             ->  page.css
-```
-
-When `embed_assets` is true, `embedded_css` contains the selected template CSS plus automatic CSS for only the md2html features used by that page. Plain pages using `super-barebones.html` get no bundled CSS and no empty `<style>` block. Pages without math do not load MathJax. The bundled reading templates keep display math horizontally scrollable, wrap long links when needed, and constrain common embedded media on narrow screens.
-
-Template directories are searched before the bundled template directory, so `--templates templates` lets `templates/page.html` override the bundled `page.html`. For a custom template, md2html looks for a same-name companion CSS file in `template_dirs`; for example, `templates/report.html` automatically embeds `templates/report.css` when it exists.
-
-Override template CSS from config:
+A compact config:
 
 ```json
 {
-  "template": "report.html",
-  "template_dirs": ["templates"],
-  "css": ["templates/report.css"]
-}
-```
-
-Use `"css": null` or omit the key to use the selected template's default CSS. Use `"css": []` to disable template CSS while keeping automatic feature CSS. Set `"feature_css": false` to disable automatic md2html feature CSS too. When `embed_assets` is false, `embedded_css` is empty and `stylesheets` are emitted as `<link>` tags instead.
-
-Automatic feature CSS is keyed by these feature names:
-
-- `inline_code`: Markdown inline code spans.
-- `code_highlight`: Markdown fenced code blocks and highlighted source embeds.
-- `code_box`: `@src(...)` and `@src-begin(...)` source blocks.
-- `collapsible_code`: collapsible or collapsed `@src(...)` blocks.
-- `code_output`: cached or executed output attached to a source block.
-- `toc`: `@toc`.
-- `math`: `$...$` or `$$...$$` math spans.
-- `image`: Markdown images and Obsidian image embeds.
-- `obsidian_image`: Obsidian image embeds.
-- `warning`: md2html warning boxes, such as a missing source embed in non-strict mode.
-
-Template variables use Jinja syntax, but the variable contract is intentionally simple enough to read like Liquid:
-
-- `content`: rendered page body HTML.
-- `title`: front matter title, first `#` heading, or source filename.
-- `metadata` and `frontmatter`: page front matter.
-- `embedded_css`: inline CSS selected for this page.
-- `stylesheets`: stylesheet hrefs to emit as `<link>` tags.
-- `features`: sorted list of active feature names.
-- `uses`: dictionary of feature flags, such as `uses.math` or `uses.code_box`.
-- `use_mathjax`: true only when `math.backend` is `"mathjax"` and the page contains math.
-- `header_title`: front matter title when present, otherwise the source filename.
-- `source_name`: source filename.
-- `lang`: page language, defaulting to `en`.
-- `layout`: page layout metadata, defaulting to `post`.
-
-The default `page.html` template works with JavaScript disabled: it follows the system color scheme, uses normal width and sans-serif text by default, and still renders the page content and code blocks. In browsers with CSS `:has(...)` support, the visible radio controls can change theme, width, and typeface without JavaScript. The small script applies saved settings before CSS loads, persists reader settings, and asks MathJax to re-typeset after a reader setting changes.
-
-## Configuration
-
-A single config file can drive both HTML output and Jekyll Markdown output. Put shared settings at the top level, put Jekyll-only settings under `jekyll`, and use `--format` plus `-o/--output` when you want a different output mode or destination for a particular run:
-
-```bash
-md2html --config md2html.json
-md2html --config md2html.json --format jekyll -o jekyll
-```
-
-If you use the same `output` path for both modes, the generated `.html` and `.md` files will land under the same output root. Use separate output directories when you want to keep the two builds side by side.
-
-A compact `md2html.json`:
-
-```json
-{
-  "input": "notes",
+  "input": "src",
   "output": "html",
   "recursive": true,
   "copy_assets": true,
   "embed_assets": true,
-  "feature_css": true,
   "execute": false,
   "images": {
     "class": "note-image",
     "width": "70%"
+  },
+  "code": {
+    "commands": {
+      "wl": "wolframscript -file {src}"
+    },
+    "timeout": 15,
+    "output_suffix": ".out"
   },
   "jekyll": {
     "layout": "post",
@@ -199,21 +108,7 @@ A compact `md2html.json`:
 }
 ```
 
-For a fuller starting point that includes every major section, run:
-
-```bash
-md2html --example-config
-```
-
-To customize the default HTML layout and CSS as one file, run:
-
-```bash
-md2html --example-layout
-```
-
-The generated config points at `templates/page.html`, so those two commands work together as a starting point.
-
-Canonical top-level keys:
+Common top-level keys:
 
 - `input`: Markdown file, directory, or list of files/directories to build.
 - `output`: Output file for one input, or output directory for multiple inputs/directories.
@@ -221,52 +116,21 @@ Canonical top-level keys:
 - `project_root`: Base directory for includes, source embeds, assets, and relative template directories.
 - `output_mode`: `"html"` or `"jekyll"`. The CLI `--format` option overrides this.
 - `template_dirs`: Additional template directories.
-- `template`: HTML template name for HTML output. Defaults to `page.html`. The CLI `--override-template` option overrides this for a single run.
-- `css`: Local CSS file or list of files to embed when `embed_assets` is true. `null` uses the selected template's default CSS.
-- `feature_css`: Include automatic CSS for md2html-generated features used by the page. Defaults to `true`.
-- `stylesheets`: Stylesheet links emitted when `embed_assets` is false.
-- `execute`: Run source files for `@src(...)` when their output files are missing or stale.
+- `template`: HTML template name for HTML output. Defaults to `page.html`.
+- `css`: Local CSS file or list of files to embed when `embed_assets` is true. `null` uses the selected template's default CSS; `[]` disables template CSS.
+- `feature_css`: Include automatic CSS for generated features used by the page. Defaults to `true`.
+- `stylesheets`: Stylesheet links emitted by templates. Use this when `embed_assets` is false.
+- `execute`: Run file-backed `@src(...)` blocks when their output files are missing or stale.
 - `embed_assets`: Embed selected CSS in HTML output.
 - `copy_assets`: Copy referenced local assets next to generated pages.
 - `no_overwrite`: Skip writes when an output file already exists.
-- `force_rebuild`: Rebuild even when outputs or source execution results appear current.
+- `force_rebuild`: Rebuild even when outputs appear current. When `execute` is enabled, this also refreshes source execution outputs.
 - `strict`: Treat missing includes and source embeds as errors.
 - `verbose`: Print built/skipped files and diagnostics.
 
 Nested keys:
 
-```json
-{
-  "math": {
-    "backend": "mathjax"
-  },
-  "images": {
-    "class": "note-image",
-    "width": "70%"
-  },
-  "code": {
-    "commands": {
-      "py": "python {src}",
-      "rkt": "racket {src}"
-    },
-    "timeout": 15,
-    "output_suffix": ".out",
-    "highlight_style": "default",
-    "highlight_dark_style": "github-dark"
-  },
-  "jekyll": {
-    "math": "passthrough",
-    "layout": "post",
-    "stylesheet": "assets/css/md2html.css",
-    "highlight_fences": false,
-    "frontmatter": {
-      "render_with_liquid": false
-    }
-  }
-}
-```
-
-- `math.backend`: Math renderer used by HTML output. The bundled template includes browser-side math rendering when this is `"mathjax"` and otherwise emits md2html math wrappers without loading a renderer.
+- `math.backend`: `mathjax` loads browser-side math rendering for pages that contain math. Other values emit math wrappers without loading a renderer.
 - `images.class`: Default CSS class added to Obsidian image embeds.
 - `images.width`: Default width for Obsidian image embeds.
 - `code.commands`: Execution commands by file extension or language. Commands may use `{src}` for the source path and `{stem}` for the source path without its suffix.
@@ -280,13 +144,145 @@ Nested keys:
 - `jekyll.highlight_fences`: Convert Markdown fenced code blocks to highlighted HTML before Jekyll processes the page.
 - `jekyll.frontmatter`: Front matter defaults merged into every generated page. Per-page front matter wins.
 
+For a complete starter config:
+
+```bash
+md2html --example-config
+```
+
+## Built-In Starters
+
+```bash
+# Print this README from the installed command.
+md2html --readme
+
+# Write a starter config to md2html.json.
+md2html --example-config
+
+# Write an editable single-file HTML layout to templates/page.html.
+md2html --example-layout
+```
+
+Pass a path to `--example-config` or `--example-layout` to choose another destination. Pass `-` as the path to print the generated file to stdout. Existing files are not overwritten unless `--force-rebuild` is also passed.
+
+## Templates And CSS
+
+HTML output uses `page.html` by default. The built-in templates are:
+
+- `super-barebones.html`: A near-plain HTML document. Pages still get CSS for generated features they use.
+- `barebones.html`: A simple centered reading page without reader controls.
+- `page.html`: The default reading page with title, theme, width, and typeface controls.
+
+Use `--override-template barebones.html` for one run, set `"template"` in config, or set `template` in page front matter. Use `--templates templates` to add a custom template directory; for example, `templates/report.html` can have a same-name `templates/report.css` companion file.
+
+When `embed_assets` is true, CSS is inlined in the generated HTML. Template CSS is included by default, and generated feature CSS is included only for features the page uses. The feature names, as they appear in the `features` and `uses` template variables, are: `inline_code`, `code_highlight`, `code_box`, `collapsible_code`, `code_output`, `toc`, `math`, `image`, `obsidian_image`, and `warning`.
+
+Use `"css": ["templates/report.css"]` to replace the selected template's default CSS. Use `"css": []` to disable template CSS while keeping feature CSS. Set `"feature_css": false` to disable feature CSS too. When `embed_assets` is false, `embedded_css` is empty; add stylesheet links with `stylesheets`.
+
+Custom templates can use these variables:
+
+- `content`: Rendered page body HTML.
+- `title`: Front matter title, first `#` heading, or source filename.
+- `metadata` and `frontmatter`: Page front matter.
+- `embedded_css`: Inline CSS selected for this page.
+- `stylesheets`: Stylesheet hrefs to emit as `<link>` tags.
+- `features`: Sorted list of active feature names.
+- `uses`: Feature flags such as `uses.math` or `uses.code_box`.
+- `use_mathjax`: True only when the page contains math and `math.backend` is `mathjax`.
+- `header_title`: Front matter title when present, otherwise the source filename.
+- `source_name`: Source filename.
+- `lang`: Page language, defaulting to `en`.
+- `layout`: Page layout metadata, defaulting to `post`.
+
+To customize the default layout and CSS as one file:
+
+```bash
+md2html --example-layout
+```
+
+## Directives
+
+Put directives on their own lines.
+
+### `@toc`
+
+`@toc` is replaced with a compact `Directory`. Headings named `Solution` are skipped. Exercise headings are grouped inside the `Exercises` entry.
+
+```md
+@toc
+
+## Section 2.5
+### Exercises
+#### Exercise 2.77
+##### Solution
+#### Exercise 2.78
+```
+
+### `@include(path)`
+
+Includes are resolved relative to the current Markdown file first, then the project root. Included files may contain front matter; only the including page's front matter is used for the rendered page. Include cycles raise an error.
+
+```md
+@include(_partials/header.md)
+```
+
+### `@src(path[, flags...])`
+
+Embeds a source file with syntax highlighting. Without execution, an existing sibling output file is embedded when present; otherwise only the source appears. With `--execute` or `"execute": true`, md2html runs the source when the sibling output file is missing, older than the source, or `--force-rebuild` is used.
+
+```md
+@src(code/ex2-77.rkt)              # expanded, not collapsible
+@src(code/ex2-77.rkt, collapsible) # expanded, collapsible
+@src(code/ex2-77.rkt, collapsed)   # collapsed, collapsible
+@src(example.py, lang=python, caption="Runnable example")
+```
+
+Default execution support covers Python, shell scripts, JavaScript, Racket/Scheme, C, and C++ when the needed tools are installed. Add or override commands in `md2html.json`:
+
+```json
+{
+  "code": {
+    "commands": {
+      "rkt": "racket {src}",
+      "py": "python {src}",
+      "wl": "wolframscript -file {src}"
+    },
+    "timeout": 10,
+    "output_suffix": ".out"
+  }
+}
+```
+
+The watch graph records article-level edges such as `main.cpp -> page.md` and, when present, `main.out -> page.md`. It does not inspect language-level dependencies such as C/C++ headers or Racket imports.
+
+### `@src-begin(lang[, flags...])`
+
+Embeds an inline source block. Close it with `@src-end`. Inline source blocks are display-only: they are highlighted but are not executed, do not read cached output, and do not use `code.commands`.
+
+```md
+@src-begin(cpp, godbolt)
+#include <iostream>
+int main(){ std::cout << "Hello, world!\n"; }
+@src-end
+```
+
+The `godbolt` flag adds a link to Compiler Explorer.
+
+### Obsidian Images
+
+```md
+![[img/ex3-10.svg|width=70%|alt=Environment diagram|class=centered]]
+```
+
+Width values ending in `%`, `px`, `em`, or `rem` become CSS widths. Plain numeric widths are treated as pixels. Local image assets are copied next to generated pages when `copy_assets` is true.
+
 ## Jekyll Output
 
 `--format jekyll` writes Markdown files with YAML front matter so Jekyll can run its normal Markdown, layout, and styling pipeline.
 
 - Each page keeps its own front matter. A configured default `layout` is added only when the page has none.
 - One stylesheet covering md2html's generated markup is written under the output root unless `jekyll.stylesheet` is `null`.
-- Files or directories whose names start with `_` are skipped as render sources. They are still copied as static files when `copy_assets` is enabled, matching Jekyll's private-path conventions.
+- Files or directories whose names start with `_` are skipped as render sources. They are still copied as static files when `copy_assets` is enabled.
 
 With the default `jekyll.math: "passthrough"`, disable kramdown's math engine if your MathJax setup expects dollar delimiters:
 
@@ -312,78 +308,6 @@ Then configure MathJax for dollar delimiters:
 
 `examples/sicp-example/jekyll/` contains a working `_config.yml` and `_layouts/post.html` demonstrating this setup.
 
-## Directives
-
-### `@toc`
-
-Place `@toc` on its own line. The builder scans Markdown headings and creates a `Directory`. Headings named `Solution` are skipped. Exercise headings are shown compactly inside the `Exercises` entry:
-
-```md
-@toc
-
-## Section 2.5
-### Exercises
-#### Exercise 2.77
-##### Solution
-#### Exercise 2.78
-```
-
-### `@include(path)`
-
-Includes are resolved relative to the current Markdown file first, then the project root. Included files may contain front matter; only the including page's front matter is used for the rendered page. Include cycles raise an error.
-
-```md
-@include(_partials/header.md)
-```
-
-### `@src(path[, flags...])`
-
-Embeds a source file. If `--execute` is enabled, the source is run when the sibling output file is missing or older than the source. Otherwise, an existing sibling output file is reused. If execution is disabled and no output file exists, only the source is embedded.
-
-```md
-@src(code/ex2-77.rkt)              # expanded, not collapsible
-@src(code/ex2-77.rkt, collapsible) # expanded, collapsible
-@src(code/ex2-77.rkt, collapsed)   # collapsed, collapsible
-@src(example.py, lang=python, caption="Runnable example")
-```
-
-Default execution commands are provided for Python, shell, Node, Racket, C, and C++. You can override or add commands in `md2html.json`; this is also how to run file types that md2html does not know about directly:
-
-```json
-{
-  "code": {
-    "commands": {
-      "rkt": "racket {src}",
-      "py": "python {src}",
-      "wl": "wolframscript -file {src}"
-    },
-    "timeout": 10,
-    "output_suffix": ".out"
-  }
-}
-```
-
-The watch graph records article-level edges such as `main.cpp -> page.md` and, when present, `main.out -> page.md`. It does not inspect language-level dependencies such as C/C++ headers or Racket imports.
-
-### `@src-begin(lang, godbolt)`
-
-Embeds an inline code block. Close with `@src-end`. Inline source blocks are display-only: they are highlighted but are not executed and do not use `code.commands`.
-
-```md
-@src-begin(cpp, godbolt)
-#include <iostream>
-int main(){ std::cout << "Hello, world!\n"; }
-@src-end
-```
-
-### Obsidian Images
-
-```md
-![[img/ex3-10.svg|width=70%|alt=Environment diagram|class=centered]]
-```
-
-Width values ending in `%`, `px`, `em`, or `rem` become CSS widths. Plain numeric widths become HTML `width` attributes.
-
 ## Python API
 
 ```python
@@ -397,11 +321,6 @@ print(result.as_dict())
 
 ## Behavior And Limits
 
-The dependency graph models Markdown `@include` relationships and direct article dependencies from `@src(...)` source/output files. It is intentionally an article rebuild graph, not a general language build graph.
+The dependency graph models Markdown `@include` relationships and direct article dependencies from `@src(...)` source/output files. It is an article rebuild graph, not a general language build graph.
 
 Source execution runs local commands on the current machine. Keep `execute` disabled for untrusted notes or source files.
-
-TODOs:
-
-- Inline `@src-begin(...)` execution is not implemented. Use file-backed `@src(path)` blocks when output capture or custom commands are needed.
-- Non-MathJax math output needs a renderer extension point before `math.backend` can produce SVG or MathML directly.
