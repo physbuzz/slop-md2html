@@ -1,8 +1,11 @@
 # md2html
 
-`md2html` turns Markdown notes into standalone HTML pages or Jekyll-ready Markdown. It is aimed at notes that use TeX math, `@toc`, `@include`, Obsidian-style image embeds, and source-code snippets with optional execution.
+`md2html` turns Markdown notes into standalone HTML pages or Jekyll-ready Markdown. It's aimed at quick math notes, so on my personal computer I can do 
+`md2html notes.md && upload notes.html` and have a shareable link to a beautiful standalone webpage ready.
 
-Each page is built in a fixed order: parse front matter, expand `@include` recursively, convert Obsidian image embeds, replace `@toc` with a heading directory, protect `$...$` and `$$...$$` math so Markdown does not alter TeX, expand `@src` code directives, render Markdown, then restore the math and wrap the result in a template with the CSS and scripts the page needs.
+The reason for making Yet Another Static Website Generator is to add some creature comforts and the ability to execute code snippets (which is handy if, say, you're solving 200 problems in a textbook and so have 200 short C++ or Racket files to run) if the `--execute` flag is enabled. There are also the directives `@toc` for printing a table of contents, `@include` for including other markdown, `![[foo.png]]` for Obsidian-style image embeds, and `@src(file.cpp, collapsed)` for a collapsed code snippet box that shows the `stdout` of `file.cpp`!
+
+Each page is built in a fixed order: parse front matter, expand `@include` recursively, convert Obsidian image embeds, replace `@toc` with a heading directory, protect `$...$` and `$$...$$` math so Markdown does not alter LaTeX, expand `@src` code directives, render Markdown, then restore the math and wrap the result in a template with the CSS and scripts the page needs.
 
 ## Quick Orientation
 
@@ -78,7 +81,8 @@ With one input and no `-o`, output is written beside the source with an `.html` 
 
 ## Config
 
-`md2html` reads `./md2html.json` automatically when it exists. Use `--config path/to/md2html.json` to pass a different file. Relative `input`, `output`, `project_root`, and template paths inside a config file are resolved from that config file's directory.
+`md2html` reads `./md2html.json` automatically when it exists. Use `--config path/to/md2html.json` to pass a different file. Paths inside a 
+config file such as `input`, `output`, `project_root`, and template paths are resolved relative to that config file's location.
 
 A compact config:
 
@@ -167,11 +171,11 @@ Pass a path to `--example-config` or `--example-layout` to choose another destin
 
 ## Templates And CSS
 
-HTML output uses `page.html` by default. The built-in templates are:
+The built-in/bundled templates are:
 
-- `super-barebones.html`: A near-plain HTML document. Pages still get CSS for generated features they use.
-- `barebones.html`: A simple centered reading page without reader controls.
-- `page.html`: The default reading page with title, theme, width, and typeface controls.
+- `super-barebones.html`: A near-plain HTML document. Pages still get CSS for generated features they use (eg. expandable code boxes).
+- `barebones.html`: A simple centered reading page.
+- `page.html` (default): A simple centered reading page with typeface controls and a light/dark mode toggle.
 
 Use `--override-template barebones.html` for one run, set `"template"` in config, or set `template` in page front matter. Use `--templates templates` to add a custom template directory; for example, `templates/report.html` can have a same-name `templates/report.css` companion file.
 
