@@ -481,6 +481,9 @@ def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
     (source / "_posts" / "2026-05-18-gaussianintegral.md").write_text(
         "---\nlayout: post\ntitle: Gaussian Integral\ntags: [math]\n---\nBody $x^2$.\n", encoding="utf-8"
     )
+    (source / "_posts" / "2026-05-19-liquid.html").write_text(
+        "---\nlayout: post\ntitle: Liquid Post\n---\n{{ site.title }} @toc", encoding="utf-8",
+    )
     (source / "_posts" / "_2026-05-17-private.md").write_text("---\nlayout: post\ntitle: Private\n---\nHidden.\n")
     (source / "index.html").write_text(
         "---\nlayout: default\ntitle: Home\n---\n{% for post in site.posts %}<a href=\"{{ post.url | relative_url }}\">{{ post.title }}</a>{% endfor %}", encoding="utf-8"
@@ -508,6 +511,7 @@ def test_native_site_model_layouts_includes_assets_and_dated_urls(tmp_path: Path
     result = Project(settings).build()
     post = output / "2026/05/18/gaussianintegral.html"
     assert post in result.written
+    assert "Native site @toc" in (output / "2026/05/19/liquid.html").read_text()
     assert not (output / "gaussianintegral/index.html").exists()
     assert not (output / "_posts/_2026-05-17-private.html").exists()
     post_text = post.read_text(encoding="utf-8")
@@ -517,7 +521,93 @@ def test_native_site_model_layouts_includes_assets_and_dated_urls(tmp_path: Path
     index = (output / "index.html").read_text()
     assert 'href="/2026/05/18/gaussianintegral.html"' in index
     assert "Private" not in index
+    assert "Gaussian Integral" in (output / "feed.xml").read_text()
     assert not result.warnings
+
+
+def test_liquid_only_pages_preserve_suffix_and_special_syntax(tmp_path: Path):
+    source = tmp_path / "site"
+    output = tmp_path / "public"
+    (source / "_includes").mkdir(parents=True)
+    (source / "_includes" / "value.html").write_text("included")
+    literal = "# Not Markdown\n@toc\n@src-begin(python)\n$x^2$ ![[image.png]]"
+    (source / "page.html").write_text(
+        "{{ site.title }} {% include value.html %} {% raw %}{{ untouched }}{% endraw %}\n" + literal,
+    )
+    (source / "short.htm").write_text("{{ site.title }}")
+    (source / "feed.xml").write_text("<feed><title>{{ site.title }}</title><text>@toc</text></feed>")
+    settings = Settings(
+        input=source, output=output, output_mode="site", project_root=source,
+        recursive=True, site_data={"title": "Liquid site"},
+    )
+    result = Project(settings).build()
+    page = (output / "page.html").read_text()
+    assert "Liquid site included {{ untouched }}" in page
+    assert literal in page and "table-of-contents" not in page and "MathJax" not in page
+    assert (output / "short.htm").read_text() == "Liquid site\n"
+    assert (output / "feed.xml").read_text() == "<feed><title>Liquid site</title><text>@toc</text></feed>\n"
+    assert not (output / "feed.html").exists()
+    assert source / "_includes" / "value.html" in result.page_dependencies[source / "page.html"]
+
+
+def test_markdown_and_liquid_only_pages_use_distinct_rendering_paths(tmp_path: Path):
+    source = tmp_path / "content"
+    output = tmp_path / "public"
+    source.mkdir()
+    (source / "note.markdown").write_text("# {{ site.title }}\n\n@toc\n")
+    (source / "document.html").write_text("# {{ site.title }}\n@toc\n")
+    settings = Settings(
+        input=source, output=output, project_root=source, recursive=True,
+        site_data={"title": "Rendered"},
+    )
+    Project(settings).build()
+    markdown = (output / "note.html").read_text()
+    liquid = (output / "document.html").read_text()
+    assert '<h1 id="rendered">Rendered</h1>' in markdown and "table-of-contents" in markdown
+    assert "# Rendered\n@toc" in liquid and '<main class="container">' not in liquid
+
+    single = tmp_path / "single.html"
+    single.write_text('<img src="image.png">')
+    (tmp_path / "image.png").write_bytes(b"image")
+    Project(Settings.single(single, tmp_path / "moved/single.html")).build()
+    assert (tmp_path / "moved/image.png").read_bytes() == b"image"
+
+
+def test_source_liquid_can_be_disabled_without_disabling_layouts(tmp_path: Path):
+    source = tmp_path / "site"
+    output = tmp_path / "public"
+    (source / "_layouts").mkdir(parents=True)
+    (source / "_layouts" / "default.html").write_text("<title>{{ page.title }}</title><main>{{ content }}</main>")
+    (source / "off.html").write_text(
+        "---\nlayout: default\ntitle: Page title\nparse_liquid: false\n---\n{{ page.title }}",
+    )
+    (source / "global.md").write_text("---\ntitle: Global\nparse_liquid: true\n---\n# {{ page.title }}\n")
+    settings = Settings(
+        input=source, output=output, output_mode="site", project_root=source,
+        recursive=True,
+    )
+    Project(settings).build()
+    html = (output / "off.html").read_text()
+    assert "<title>Page title</title>" in html and "<main>{{ page.title }}</main>" in html
+    assert '<h1 id="global">Global</h1>' in (output / "global.html").read_text()
+    Project(settings.with_cli(output=tmp_path / "without-liquid", parse_liquid=False)).build()
+    markdown = (tmp_path / "without-liquid/global.html").read_text()
+    assert "<h1 id=\"pagetitle\">{{ page.title }}</h1>" in markdown
+
+
+def test_source_output_collision_warns_and_other_pages_continue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+    monkeypatch.chdir(tmp_path)
+    Path("page.html").write_text("{{ site.title }}")
+    Path("feed.xml").write_text("<feed/>")
+    Path("note.md").write_text("# Note\n")
+    planned = settings_list_from_args(parser().parse_args(["page.html", "feed.xml", "note.md", "-o", "public"]))
+    assert [item.output for item in planned] == [Path("public/page.html"), Path("public/feed.xml"), Path("public/note.html")]
+    collision = Project(Settings.single(Path("page.html"))).build()
+    assert not collision.written and not collision.page_dependencies
+    assert main(["page.html", "note.md"]) == 0
+    assert Path("page.html").read_text() == "{{ site.title }}"
+    assert Path("note.html").is_file()
+    assert "source and output are the same file" in capsys.readouterr().err
 
 
 def test_native_site_deduplicates_mathjax_styles(tmp_path: Path):
@@ -587,11 +677,12 @@ def test_only_md2html_json_is_discovered_and_configuration_is_json(tmp_path: Pat
     with pytest.raises(ValueError, match="must be a JSON file"):
         load_settings(tmp_path / "md2html.yml")
     config = tmp_path / "md2html.json"
-    config.write_text('{"input":"content","timeout":3.5,"feature_css":false,"highlight_style":"friendly"}')
+    config.write_text('{"input":"content","timeout":3.5,"feature_css":false,"parse_liquid":false,"highlight_style":"friendly"}')
     assert find_config(tmp_path) == config
     settings = load_settings(config)
     assert settings.timeout == 3.5
     assert not settings.feature_css
+    assert not settings.parse_liquid
     assert settings.highlight_style == "friendly"
     config.write_text("input: content\n")
     with pytest.raises(ValueError, match="could not read configuration"):
@@ -736,11 +827,12 @@ def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFix
     settings = settings_from_args(args)
     assert settings.execute and settings.recursive and settings.force
     assert settings.input == source and settings.output == Path("one.html")
+    assert not settings_from_args(parser().parse_args([str(source), "--no-liquid"])).parse_liquid
     assert main(["--example-config"]) == 0
     assert (tmp_path / "md2html.json").is_file()
     assert main(["--example-config"]) == 2
     assert main(["--example-config", "--force"]) == 0
-    assert (tmp_path / "md2html.json").read_text().startswith("{")
+    assert '"parse_liquid": true' in (tmp_path / "md2html.json").read_text()
     assert main(["--example-template", "-"]) == 0
     assert "<!doctype html>" in capsys.readouterr().out.lower()
     assert main(["--example-css"]) == 0
@@ -750,6 +842,9 @@ def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFix
     assert ".code-box .codehilite" in example_css
     assert ".code-output pre" in example_css
     assert ".codehilite .kc { color: #008000; font-weight: bold }" in example_css
+    assert main([str(source), "--templates", "templates"]) == 0
+    generated = source.with_suffix(".html").read_text()
+    assert '<main class="container">' in generated and "--reader-text-size" in generated
 
 
 def test_help_and_readme_explain_watch_serve_and_examples(capsys: pytest.CaptureFixture[str]):
@@ -761,9 +856,13 @@ def test_help_and_readme_explain_watch_serve_and_examples(capsys: pytest.Capture
     assert "--shared-assets" in help_text and "--highlight-style" in help_text and "--timeout" in help_text
     assert main(["--readme"]) == 0
     readme = capsys.readouterr().out
+    assert readme == (Path(__file__).parents[1] / "readme.md").read_text()
     assert "@src-begin" in readme
     assert "2026/05/18/gaussianintegral.html" in readme
     assert '"shared_assets": true' in readme and "md2html.json" in readme
+    for action in parser()._actions:
+        for option in (name for name in action.option_strings if name.startswith("--")):
+            assert option in readme
 
 
 def test_preview_server_serves_selected_root(tmp_path: Path):

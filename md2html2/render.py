@@ -37,8 +37,6 @@ RAW_CODE = re.compile(r"<(pre|code)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 RAW_HIGHLIGHT = re.compile(r"<div\b[^>]*class=[\"'][^\"']*(?:codehilite|highlight)[^\"']*[\"'][^>]*>.*?</div>", re.IGNORECASE | re.DOTALL)
 RAW_COMMENT = re.compile(r"<!--[\s\S]*?-->")
 OBSIDIAN_IMAGE = re.compile(r"!\[\[([^\]\n]+)\]\]")
-MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
-HTML_IMAGE = re.compile(r"<(?:img|source|video)\b[^>]*\b(?:src|poster)=[\"']([^\"']+)[\"']", re.IGNORECASE)
 HIGHLIGHT = re.compile(r"{%\s*highlight\s+([\w+.-]+)\s*%}(.*?){%\s*endhighlight\s*%}", re.DOTALL)
 SRC_BLOCK = re.compile(r"^@src-begin\(([^)]*)\)[ \t]*\r?\n(.*?)^@src-end[ \t]*$", re.MULTILINE | re.DOTALL)
 SRC_BEGIN_LINE = re.compile(r"^[ \t]*@src-begin\([^)]*\)[ \t]*$")
@@ -347,7 +345,7 @@ class ContentRenderer:
         self.liquid = liquid
 
     def render(
-        self, source: Path, body: str, context: dict[str, Any], *, markdown: bool = True, cache_page: Path,
+        self, source: Path, body: str, context: dict[str, Any], *, cache_page: Path, parse_liquid: bool = True,
     ) -> Rendered:
         self._validate_source_blocks(source, body)
         stash = Stash()
@@ -411,13 +409,6 @@ class ContentRenderer:
             return stash.put(markup, block=True)
 
         body = OBSIDIAN_IMAGE.sub(obsidian_image, body)
-        for pattern in (MARKDOWN_IMAGE, HTML_IMAGE):
-            for match in pattern.finditer(body):
-                name = match.group(1).strip("'\"")
-                if "://" not in name and not name.startswith(("#", "data:", "mailto:")):
-                    path = self._resolve_reference(name, source)
-                    dependencies.add(path)
-                    assets[path] = Path(name)
         body = self._protect_math(body, stash, features, warnings)
 
         if TOC.search(body):
@@ -425,18 +416,16 @@ class ContentRenderer:
             toc = self._toc(body)
             body = TOC.sub(stash.put(toc, block=True), body)
 
-        try:
-            body = self.liquid.from_string(liquid_source(body)).render(**context)
-        except LiquidError as error:
-            warnings.append(f"template expression failed in {source}: {error}")
-            body += f'\n<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
+        if parse_liquid:
+            try:
+                body = self.liquid.from_string(liquid_source(body)).render(**context)
+            except LiquidError as error:
+                warnings.append(f"template expression failed in {source}: {error}")
+                body += f'\n<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
 
-        if markdown:
-            renderer = HeadingRenderer()
-            md = mistune.create_markdown(renderer=renderer, plugins=["strikethrough", "table", "task_lists", "url"])
-            output = md(body)
-        else:
-            output = body
+        renderer = HeadingRenderer()
+        md = mistune.create_markdown(renderer=renderer, plugins=["strikethrough", "table", "task_lists", "url"])
+        output = md(body)
         output = ADJACENT_BLOCKQUOTES.sub("", output)
         output = stash.restore(output)
         if features.math_copy:
@@ -445,6 +434,16 @@ class ContentRenderer:
         features.warning = 'class="warning"' in output
         title = str(context.get("page", {}).get("title") or source.name)
         return Rendered(output, title, features, dependencies, assets, warnings, executor)
+
+    def render_liquid(self, source: Path, body: str, context: dict[str, Any], *, parse_liquid: bool = True) -> Rendered:
+        warnings: list[str] = []
+        if parse_liquid:
+            try:
+                body = self.liquid.from_string(liquid_source(body)).render(**context)
+            except LiquidError as error:
+                warnings.append(f"template expression failed in {source}: {error}")
+        title = str(context.get("page", {}).get("title") or source.name)
+        return Rendered(body, title, Features(), {source}, warnings=warnings)
 
     def _resolve_reference(self, name: str, origin: Path) -> Path:
         path = normal_path(Path(name).expanduser())

@@ -23,7 +23,7 @@ from pygments.util import ClassNotFound
 
 from . import __version__
 from .project import BuildResult, Project, syntax_css
-from .settings import EXAMPLE_CONFIG, Settings, find_config, load_settings, normal_path
+from .settings import EXAMPLE_CONFIG, Settings, find_config, load_settings, normal_path, page_output
 
 PAGE_CSS = (
     "page-base.css", "feature-code.css", "feature-math.css",
@@ -42,7 +42,7 @@ def _pygments_style(name: str) -> str:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="md2html",
-        description="Build an excellent standalone page or a native Markdown website.",
+        description="Build standalone HTML pages or a static site.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
   md2html article.md
@@ -52,23 +52,24 @@ def parser() -> argparse.ArgumentParser:
   md2html --example-template templates/page.html
 """,
     )
-    result.add_argument("input", nargs="*", type=Path, help="Markdown files or source directories")
+    result.add_argument("input", nargs="*", type=Path, help="Markdown, HTML, or XML files and source directories")
     result.add_argument("-o", "--output", type=Path, help="output file or directory")
     result.add_argument("-e", "--execute", action="store_true", help="run executable @src content and show its output")
-    result.add_argument("-r", "--recursive", action="store_true", help="render Markdown in subdirectories")
-    result.add_argument("-f", "--force", action="store_true", help="rerun executable content or replace an existing example file")
+    result.add_argument("-r", "--recursive", action="store_true", help="render supported documents in subdirectories")
+    result.add_argument("-f", "--force", action="store_true", help="rerun executable content, rebuild unchanged pages, or replace an example file")
     result.add_argument("-s", "--serve", action="store_true", help="serve the output and rebuild when source files change")
     result.add_argument("-w", "--watch", action="store_true", help="rebuild when source files change without starting a server")
     result.add_argument("--port", type=int, default=8000, help="preview server port (default: 8000)")
     result.add_argument("--config", type=Path, help="JSON configuration file; relative paths inside it are resolved from that file")
-    result.add_argument("--output-mode", choices=("pages", "site"), help="build independent pages or a native static site")
+    result.add_argument("--output-mode", choices=("pages", "site"), help="build independent pages or a static site")
     result.add_argument("--templates", type=Path, help="directory searched before built-in templates")
     result.add_argument("--template", help="standalone HTML template name or path")
     result.add_argument("--css", action="append", help="CSS file to embed; repeat to combine files")
-    result.add_argument("--stylesheet", action="append", help="external stylesheet URL; repeat to add more")
+    result.add_argument("--stylesheet", action="append", help="stylesheet href; repeat to add more")
     result.add_argument("--shared-assets", action="store_true", help="write shared page CSS instead of embedding it")
     result.add_argument("--no-css", action="store_true", help="do not embed CSS in standalone pages")
     result.add_argument("--no-feature-css", action="store_true", help="omit CSS for generated code, math, TOCs, images, and warnings")
+    result.add_argument("--no-liquid", action="store_true", help="do not render Liquid in source documents")
     result.add_argument("--highlight-style", type=_pygments_style, help="Pygments style name for light syntax highlighting")
     result.add_argument("--highlight-dark-style", type=_pygments_style, help="Pygments style name for dark syntax highlighting")
     result.add_argument("--math", choices=("mathjax", "mathjax-chtml", "svg", "mathml", "raw"), help="math rendering backend")
@@ -119,6 +120,8 @@ def _apply_cli(settings: Settings, args: argparse.Namespace) -> Settings:
         changes.update(css=(), feature_css=False)
     elif args.no_feature_css:
         changes["feature_css"] = False
+    if args.no_liquid:
+        changes["parse_liquid"] = False
     if args.math:
         changes["math"] = replace(settings.math, backend=args.math)
     if args.math_fonts:
@@ -141,7 +144,7 @@ def settings_list_from_args(args: argparse.Namespace) -> list[Settings]:
     if config is None and not inputs:
         config = find_config(Path("."))
         if config is None:
-            raise ValueError("give Markdown files, source directories, or --config")
+            raise ValueError("give document files, source directories, or --config")
     elif config is None and len(inputs) == 1 and inputs[0].is_dir():
         config = find_config(inputs[0])
     if config:
@@ -154,14 +157,14 @@ def settings_list_from_args(args: argparse.Namespace) -> list[Settings]:
             source = inputs[0]
             output = normal_path(args.output) if args.output else base.output
             if source.is_file() and output.is_dir():
-                output = output / source.with_suffix(".html").name
+                output = output / page_output(source).name
             return [_apply_cli(replace(base, input=source, output=output), args)]
     elif len(inputs) == 1:
         source = inputs[0]
         if source.is_file():
             output = normal_path(args.output) if args.output else None
             if output and output.is_dir():
-                output = output / source.with_suffix(".html").name
+                output = output / page_output(source).name
             return [_apply_cli(Settings.single(source, output), args)]
         else:
             output = normal_path(args.output or Path("html"))
@@ -182,9 +185,9 @@ def settings_list_from_args(args: argparse.Namespace) -> list[Settings]:
     for source in inputs:
         if collection:
             relative = source.absolute().relative_to(common.absolute())
-            output = output_root / (relative.with_suffix(".html") if source.is_file() else relative)
+            output = output_root / (page_output(relative) if source.is_file() else relative)
         else:
-            output = source.with_suffix(".html")
+            output = page_output(source)
         settings = replace(
             base, input=source, output=normal_path(output), recursive=base.recursive or args.recursive,
             shared_assets=base.shared_assets or shared,

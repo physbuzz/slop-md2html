@@ -19,15 +19,15 @@ from pygments.formatters import HtmlFormatter
 from pygments.util import ClassNotFound
 
 from .render import ContentRenderer, Executor, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
-from .settings import Settings, normal_path
+from .settings import MARKDOWN_SUFFIXES, PAGE_SUFFIXES, Settings, normal_path, page_output
 
 
-SOURCE_SUFFIXES = {".md", ".markdown"}
 PROJECT_FILES = {"md2html.json"}
 CHTML_CDN = "https://cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font@4.1.3/chtml/woff2"
 FONT_FACE = re.compile(r"@font-face\s*/\*\s*(MJX(?:-TEX)?-[A-Z0-9]+)\s*\*/\s*\{.*?\}\s*", re.DOTALL)
 CSS_IMPORT = re.compile(r"@import\s+(?:url\()?['\"]?([^'\")\s;]+)", re.IGNORECASE)
 STYLESHEET = re.compile(r"<link\b(?=[^>]*\brel=['\"][^'\"]*stylesheet)(?=[^>]*\bhref=['\"]([^'\"]+))[^>]*>", re.IGNORECASE)
+MEDIA_ASSET = re.compile(r"<(?:img|source|video)\b[^>]*\b(?:src|poster)=['\"]([^'\"]+)['\"]", re.IGNORECASE)
 
 
 def syntax_css(light_style: str = "default", dark_style: str = "github-dark") -> str:
@@ -46,7 +46,6 @@ class Page:
     relative: Path
     metadata: dict[str, Any]
     body: str
-    markdown: bool
     url: str
     output_relative: Path
 
@@ -125,6 +124,9 @@ class Project:
             self._write_shared_css(result)
         for page in selected:
             target = self._target(page)
+            if page.source.absolute() == target.absolute():
+                result.warnings.append(f"skipping {page.source}: source and output are the same file")
+                continue
             if skip_unchanged and not self.settings.force and target.is_file() and target.stat().st_mtime_ns >= page.source.stat().st_mtime_ns:
                 result.skipped.append(target)
                 result.page_dependencies[page.source] = {page.source, *self.shared_dependencies}
@@ -191,10 +193,12 @@ class Project:
     def _discover_pages(self) -> list[Page]:
         source = self.settings.input
         if source.is_file():
+            if source.suffix.lower() not in PAGE_SUFFIXES:
+                raise ValueError(f"unsupported page type: {source}")
             metadata, body = parse_frontmatter(source.read_text(encoding="utf-8"))
             relative = Path(source.name)
             output_relative = Path(self.settings.output.name)
-            return [Page(source, relative, metadata, body, source.suffix.lower() in SOURCE_SUFFIXES, "/" + output_relative.name, output_relative)]
+            return [Page(source, relative, metadata, body, "/" + output_relative.name, output_relative)]
 
         pattern = "**/*" if self.settings.recursive or self.settings.output_mode == "site" else "*"
         pages: list[Page] = []
@@ -202,16 +206,10 @@ class Project:
             if not path.is_file() or self._excluded(path):
                 continue
             relative = path.relative_to(source)
-            if path.suffix.lower() in SOURCE_SUFFIXES:
+            if path.suffix.lower() in PAGE_SUFFIXES:
                 metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
                 url, output = self._output_policy(relative, metadata)
-                pages.append(Page(path, relative, metadata, body, True, url, output))
-            elif path.suffix.lower() in {".html", ".htm", ".xml"}:
-                text = path.read_text(encoding="utf-8")
-                metadata, body = parse_frontmatter(text)
-                if metadata:
-                    url, output = self._output_policy(relative, metadata)
-                    pages.append(Page(path, relative, metadata, body, False, url, output))
+                pages.append(Page(path, relative, metadata, body, url, output))
         return pages
 
     def _excluded(self, path: Path) -> bool:
@@ -234,7 +232,7 @@ class Project:
 
     def _output_policy(self, relative: Path, metadata: dict[str, Any]) -> tuple[str, Path]:
         permalink = metadata.get("permalink")
-        post = relative.parts and relative.parts[0] == "_posts"
+        post = relative.parts and relative.parts[0] == "_posts" and relative.suffix.lower() != ".xml"
         match = re.match(r"(\d{4})-(\d{2})-(\d{2})-(.+)", relative.stem) if post else None
         if permalink:
             url = str(permalink)
@@ -243,7 +241,7 @@ class Project:
             pattern = str(self.site.get("permalink", "/:year/:month/:day/:title.html"))
             url = pattern.replace(":year", year).replace(":month", month).replace(":day", day).replace(":title", slugify(slug))
         else:
-            normal = relative.with_suffix(".html")
+            normal = page_output(relative)
             url = "/" + normal.as_posix()
         if not url.startswith("/"):
             url = "/" + url
@@ -302,26 +300,33 @@ class Project:
         self.loader.dependencies.clear()
         page_data = page.data()
         context = {"site": self.site, "page": page_data}
-        rendered = self.renderer.render(
-            page.source, page.body, context, markdown=page.markdown, cache_page=page.output_relative,
+        parse_liquid = self.settings.parse_liquid and page.metadata.get("parse_liquid", True) is not False
+        markdown = page.source.suffix.lower() in MARKDOWN_SUFFIXES
+        rendered = (
+            self.renderer.render(page.source, page.body, context, cache_page=page.output_relative, parse_liquid=parse_liquid)
+            if markdown else self.renderer.render_liquid(page.source, page.body, context, parse_liquid=parse_liquid)
         )
         page_data["title"] = rendered.title
         page.metadata["title"] = rendered.title
         if self.settings.output_mode == "site":
             content = self._apply_layouts(rendered.html, page_data, page.source, rendered)
-        else:
+        elif markdown:
             content = self._page_template(rendered, page_data, self._target(page))
+        else:
+            content = rendered.html
         rendered.html = content.rstrip() + "\n"
         rendered.dependencies.update(self.loader.dependencies)
         rendered.dependencies.update(self.shared_dependencies)
-        for href in STYLESHEET.findall(rendered.html):
-            name = href.split("?", 1)[0].split("#", 1)[0]
-            if name and "://" not in name and not name.startswith("//"):
-                path = (self.source_root if name.startswith("/") else page.source.parent) / name.lstrip("/")
-                if not path.exists():
-                    path = self.settings.project_root / name.lstrip("/")
-                self._track_css(path, rendered.dependencies)
-                rendered.assets[normal_path(path)] = Path(name.lstrip("/"))
+        for pattern in (STYLESHEET, MEDIA_ASSET):
+            for href in pattern.findall(rendered.html):
+                name = href.split("?", 1)[0].split("#", 1)[0]
+                if name and "://" not in name and not name.startswith(("//", "data:", "mailto:")):
+                    path = (self.source_root if name.startswith("/") else page.source.parent) / name.lstrip("/")
+                    if not path.exists():
+                        path = self.settings.project_root / name.lstrip("/")
+                    if pattern is STYLESHEET:
+                        self._track_css(path, rendered.dependencies)
+                    rendered.assets[normal_path(path)] = Path(name.lstrip("/"))
         return rendered
 
     def _prune_execution_pages(self, pages: list[Page], warnings: list[str]) -> None:
@@ -601,7 +606,7 @@ class Project:
             relative = source.relative_to(self.source_root)
             if relative.name in PROJECT_FILES or any(part in {"_layouts", "_includes", "_posts"} for part in relative.parts):
                 continue
-            if source.suffix.lower() in SOURCE_SUFFIXES:
+            if source.suffix.lower() in MARKDOWN_SUFFIXES:
                 continue
             target = self.settings.output / relative
             if source.absolute() == target.absolute():
