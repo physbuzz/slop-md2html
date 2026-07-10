@@ -8,10 +8,14 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import metadata
 from importlib.resources import files
 from pathlib import Path
+from queue import Empty, SimpleQueue
+import shutil
 import sys
 import threading
 import time
-from typing import Iterable
+
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 from . import __version__
 from .project import BuildResult, Project
@@ -135,21 +139,30 @@ def describe(result: BuildResult) -> None:
     print(f"built {result.output_count} {noun}")
 
 
-def _snapshot(settings: Settings, dependencies: Iterable[Path]) -> dict[Path, int]:
-    paths = set(dependencies)
-    if settings.input.is_file():
-        paths.add(settings.input)
-    else:
-        for path in settings.input.rglob("*"):
-            if path.is_file() and not path.is_relative_to(settings.output) and ".md2html-cache" not in path.parts:
-                paths.add(path)
-    snapshot: dict[Path, int] = {}
-    for path in paths:
-        try:
-            snapshot[path] = path.stat().st_mtime_ns
-        except OSError:
-            snapshot[path] = -1
-    return snapshot
+class WatchGraph:
+    def __init__(self) -> None:
+        self.edges: dict[Path, set[Path]] = {}
+        self.seen: set[Path] = set()
+
+    def update(self, pages: dict[Path, set[Path]], *, reset: bool = False) -> None:
+        if reset:
+            self.edges.clear()
+        else:
+            for linked in self.edges.values():
+                linked.difference_update(pages)
+        self.edges = {dependency: linked for dependency, linked in self.edges.items() if linked}
+        for page, dependencies in pages.items():
+            for dependency in dependencies:
+                dependency = dependency.resolve()
+                self.seen.add(dependency)
+                self.edges.setdefault(dependency, set()).add(page.resolve())
+
+    def affected(self, paths: set[Path]) -> set[Path]:
+        return set().union(*(self.edges.get(path.resolve(), set()) for path in paths))
+
+    @property
+    def pages(self) -> set[Path]:
+        return set().union(*self.edges.values()) if self.edges else set()
 
 
 def _server(root: Path, port: int) -> tuple[ThreadingHTTPServer, threading.Thread]:
@@ -172,31 +185,89 @@ def _server(root: Path, port: int) -> tuple[ThreadingHTTPServer, threading.Threa
 def watch(settings: Settings, *, serve: bool, port: int) -> int:
     result = Project(settings).build()
     describe(result)
+    graph = WatchGraph()
+    graph.update(result.page_dependencies, reset=True)
     server = None
     if serve:
         root = settings.output if settings.input.is_dir() else settings.output.parent
         server, _ = _server(root, port)
         path = "/" if settings.input.is_dir() else "/" + settings.output.name
         print(f"preview: http://127.0.0.1:{port}{path}")
+    changes: SimpleQueue[Path] = SimpleQueue()
+
+    def ignored(path: Path) -> bool:
+        generated = path.is_relative_to(settings.output) if settings.input.is_dir() else path == settings.output
+        return generated or ".md2html-cache" in path.parts or any(part in {".git", "node_modules", "__pycache__"} for part in path.parts)
+
+    class Handler(FileSystemEventHandler):
+        def on_any_event(self, event) -> None:
+            if event.is_directory or event.event_type in {"opened", "closed_no_write"}:
+                return
+            for name in (getattr(event, "src_path", None), getattr(event, "dest_path", None)):
+                if name:
+                    path = Path(name).resolve()
+                    if not ignored(path):
+                        changes.put(path)
+
+    observer = Observer()
+    watched: list[Path] = []
+
+    def add_roots() -> None:
+        source = settings.input if settings.input.is_dir() else settings.input.parent
+        roots = {settings.project_root, source, *(path.parent for path in graph.edges)}
+        for root in sorted((path.resolve() for path in roots if path.exists()), key=lambda path: len(path.parts)):
+            if not any(root.is_relative_to(existing) for existing in watched):
+                observer.schedule(Handler(), str(root), recursive=True)
+                watched.append(root)
+
+    add_roots()
+    observer.start()
     print(f"watching {settings.input}")
-    previous = _snapshot(settings, result.dependencies)
+
+    def copy_changed(paths: set[Path]) -> None:
+        if not settings.input.is_dir():
+            return
+        for source in paths:
+            try:
+                relative = source.relative_to(settings.input)
+            except ValueError:
+                continue
+            if (settings.templates and source.is_relative_to(settings.templates)) or source.suffix.lower() in {".md", ".markdown"} or any(part.startswith(("_", ".")) for part in relative.parts):
+                continue
+            target = settings.output / relative
+            if source.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+            elif not source.exists():
+                target.unlink(missing_ok=True)
+
     try:
         while True:
-            time.sleep(.35)
-            current = _snapshot(settings, result.dependencies)
-            if current == previous:
-                continue
-            changed = sorted(str(path) for path in set(current) | set(previous) if current.get(path) != previous.get(path))
-            print(f"change: {changed[0] if changed else settings.input}")
+            changed = {changes.get()}
+            time.sleep(.15)
+            while True:
+                try:
+                    changed.add(changes.get_nowait())
+                except Empty:
+                    break
+            print(f"change: {sorted(map(str, changed))[0]}")
             try:
-                result = Project(settings).build()
+                copy_changed(changed)
+                full = any(path not in graph.seen or path in graph.pages and not path.exists() for path in changed)
+                affected = graph.affected(changed)
+                if not full and not affected:
+                    continue
+                result = Project(settings).build(None if full else affected)
                 describe(result)
+                graph.update(result.page_dependencies, reset=full)
+                add_roots()
             except (OSError, ValueError) as error:
                 print(f"error: {error}", file=sys.stderr)
-            previous = _snapshot(settings, result.dependencies)
     except KeyboardInterrupt:
         print("stopped")
     finally:
+        observer.stop()
+        observer.join()
         if server:
             server.shutdown()
             server.server_close()

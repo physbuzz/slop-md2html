@@ -10,7 +10,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from md2html2.cli import _server, main, parser, settings_from_args
+from md2html2.cli import WatchGraph, _server, main, parser, settings_from_args
 from md2html2.project import Project
 from md2html2.render import parse_frontmatter
 from md2html2.settings import MathSettings, Settings, load_settings
@@ -114,6 +114,61 @@ def test_directives_resolve_from_including_file_and_make_toc(tmp_path: Path):
     assert '<details class="source">' in output
 
 
+def test_page_dependencies_follow_includes_templates_and_css_but_not_source_internals(tmp_path: Path):
+    templates = tmp_path / "templates"
+    parts = tmp_path / "parts"
+    css = templates / "css"
+    templates.mkdir()
+    parts.mkdir()
+    css.mkdir()
+    (templates / "page.html").write_text("{% include 'outer.html' %}{{ content }}", encoding="utf-8")
+    (templates / "outer.html").write_text("{% include 'inner.html' %}", encoding="utf-8")
+    (templates / "inner.html").write_text("template", encoding="utf-8")
+    (templates / "page.css").write_text("@import 'css/one.css';", encoding="utf-8")
+    (css / "one.css").write_text("@import 'two.css';", encoding="utf-8")
+    (css / "two.css").write_text("body { color: black; }", encoding="utf-8")
+    (parts / "one.md").write_text("@include(two.md)\n", encoding="utf-8")
+    (parts / "two.md").write_text("included\n", encoding="utf-8")
+    (tmp_path / "file.cpp").write_text('#include "header.h"\n', encoding="utf-8")
+    (tmp_path / "header.h").write_text("// deliberately not followed\n", encoding="utf-8")
+    source = tmp_path / "article.md"
+    source.write_text("@include(parts/one.md)\n\n@src(file.cpp)\n", encoding="utf-8")
+    settings = Settings.single(source).with_cli(templates=templates)
+    result = Project(settings).build()
+    dependencies = result.page_dependencies[source.resolve()]
+    expected = {source, parts / "one.md", parts / "two.md", tmp_path / "file.cpp",
+                templates / "page.html", templates / "outer.html", templates / "inner.html",
+                templates / "page.css", css / "one.css", css / "two.css"}
+    assert {path.resolve() for path in expected} <= dependencies
+    assert (tmp_path / "header.h").resolve() not in dependencies
+
+
+def test_watch_graph_replaces_stale_page_edges_after_partial_build(tmp_path: Path):
+    source = tmp_path / "content"
+    output = tmp_path / "public"
+    source.mkdir()
+    shared = source / "_shared.md"
+    shared.write_text("shared\n", encoding="utf-8")
+    first = source / "first.md"
+    second = source / "second.md"
+    first.write_text("@include(_shared.md)\n", encoding="utf-8")
+    second.write_text("@include(_shared.md)\n", encoding="utf-8")
+    settings = Settings(input=source, output=output, project_root=tmp_path, recursive=True)
+    graph = WatchGraph()
+    graph.update(Project(settings).build().page_dependencies, reset=True)
+    assert graph.affected({shared}) == {first.resolve(), second.resolve()}
+
+    first.write_text("independent\n", encoding="utf-8")
+    partial = Project(settings).build({first.resolve()})
+    assert partial.written == [output / "first.html"]
+    graph.update(partial.page_dependencies)
+    assert graph.affected({shared}) == {second.resolve()}
+    second.write_text("also independent\n", encoding="utf-8")
+    graph.update(Project(settings).build({second.resolve()}).page_dependencies)
+    assert shared.resolve() in graph.seen
+    assert not graph.affected({shared})
+
+
 def test_include_cycle_warns_without_aborting(tmp_path: Path):
     (tmp_path / "a.md").write_text("@include(b.md)\n", encoding="utf-8")
     (tmp_path / "b.md").write_text("@include(a.md)\n", encoding="utf-8")
@@ -121,6 +176,18 @@ def test_include_cycle_warns_without_aborting(tmp_path: Path):
     result = Project(Settings.single(source)).build()
     assert any("include cycle" in warning for warning in result.warnings)
     assert "Include cycle omitted" in result.written[0].read_text(encoding="utf-8")
+
+
+def test_liquid_include_cycle_warns_without_aborting(tmp_path: Path):
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "page.html").write_text("{% include 'loop.html' %}{{ content }}", encoding="utf-8")
+    (templates / "loop.html").write_text("{% include 'loop.html' %}", encoding="utf-8")
+    source = tmp_path / "article.md"
+    source.write_text("# Still built\n", encoding="utf-8")
+    result = Project(Settings.single(source).with_cli(templates=templates)).build()
+    assert any("recursive include" in warning for warning in result.warnings)
+    assert "Template cycle or error" in result.written[0].read_text(encoding="utf-8")
 
 
 def test_executable_inline_content_uses_a_persistent_workspace(tmp_path: Path):
@@ -447,7 +514,9 @@ def test_preview_server_serves_selected_root(tmp_path: Path):
 
 def test_serve_rebuilds_a_standalone_page(tmp_path: Path):
     source = tmp_path / "live.md"
-    source.write_text("# Before\n")
+    included = tmp_path / "_included.md"
+    included.write_text("Before include\n")
+    source.write_text("# Live\n\n@include(_included.md)\n")
     probe = socket.socket()
     probe.bind(("127.0.0.1", 0))
     port = probe.getsockname()[1]
@@ -466,14 +535,25 @@ def test_serve_rebuilds_a_standalone_page(tmp_path: Path):
 
     try:
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not page_contains("Before"):
+        while time.monotonic() < deadline and not page_contains("Before include"):
             time.sleep(.05)
-        assert page_contains("Before")
-        source.write_text("# After\n")
+        assert page_contains("Before include")
+        included.write_text("After include\n")
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not page_contains("After"):
+        while time.monotonic() < deadline and not page_contains("After include"):
             time.sleep(.05)
-        assert page_contains("After")
+        assert page_contains("After include")
+
+        source.write_text("# Independent\n")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not page_contains("Independent"):
+            time.sleep(.05)
+        assert page_contains("Independent")
+        time.sleep(.25)
+        modified = source.with_suffix(".html").stat().st_mtime_ns
+        included.write_text("Stale include\n")
+        time.sleep(.5)
+        assert source.with_suffix(".html").stat().st_mtime_ns == modified
     finally:
         process.terminate()
         process.wait(timeout=3)

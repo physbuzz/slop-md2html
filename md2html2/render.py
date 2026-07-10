@@ -62,6 +62,21 @@ COMMANDS = {
 }
 
 
+class TrackingLoader(FileSystemLoader):
+    def __init__(self, paths: Iterable[Path]) -> None:
+        super().__init__(paths)
+        self.dependencies: set[Path] = set()
+
+    def get_source(self, env: Environment, template_name: str, **kwargs: Any):
+        try:
+            source = super().get_source(env, template_name, **kwargs)
+        except LiquidError:
+            self.dependencies.update((Path(path) / template_name).resolve() for path in self.search_path)
+            raise
+        self.dependencies.add(Path(source.name).resolve())
+        return source
+
+
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     match = FRONTMATTER.match(text)
     if not match:
@@ -371,6 +386,7 @@ class ContentRenderer:
             body = self.liquid.from_string(liquid_source(body)).render(**context)
         except LiquidError as error:
             warnings.append(f"template expression failed in {source}: {error}")
+            body += f'\n<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
 
         if markdown:
             renderer = HeadingRenderer()
@@ -407,6 +423,7 @@ class ContentRenderer:
             kind, raw = match.group(1), match.group(2)
             name, flags = split_args(raw)
             path = (origin.parent / name).resolve()
+            dependencies.add(path)
             if path in stack or path == origin.resolve() and kind == "include":
                 chain = " -> ".join(str(item) for item in (*stack, path))
                 warnings.append(f"include cycle: {chain}")
@@ -416,7 +433,6 @@ class ContentRenderer:
             except OSError as error:
                 warnings.append(f"could not read {path}: {error}")
                 return stash.put(f'<aside class="warning">Could not read {html.escape(name)}.</aside>', block=True)
-            dependencies.add(path)
             if kind == "include":
                 _, value = parse_frontmatter(value)
                 self._validate_source_blocks(path, value)
@@ -538,7 +554,7 @@ class ContentRenderer:
 
 def make_liquid(template_dirs: Iterable[Path], site: dict[str, Any]) -> Environment:
     directories = [path for path in template_dirs if path.is_dir()]
-    environment = Environment(loader=FileSystemLoader(directories), strict_filters=False, autoescape=False)
+    environment = Environment(loader=TrackingLoader(directories), strict_filters=False, autoescape=False)
 
     def relative_url(value: Any) -> str:
         path = str(value or "")

@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 from liquid.exceptions import LiquidError
 
-from .render import ContentRenderer, Executor, Features, Rendered, liquid_source, make_liquid, parse_frontmatter, slugify
+from .render import ContentRenderer, Executor, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
 from .settings import Settings
 
 
@@ -24,6 +24,8 @@ SOURCE_SUFFIXES = {".md", ".markdown"}
 PROJECT_FILES = {"md2html.config", "md2html.json", "md2html.yml", "md2html.yaml", "_config.yml", "_config.yaml"}
 CHTML_CDN = "https://cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font@4.1.3/chtml/woff2"
 FONT_FACE = re.compile(r"@font-face\s*/\*\s*(MJX(?:-TEX)?-[A-Z0-9]+)\s*\*/\s*\{.*?\}\s*", re.DOTALL)
+CSS_IMPORT = re.compile(r"@import\s+(?:url\()?['\"]?([^'\")\s;]+)", re.IGNORECASE)
+STYLESHEET = re.compile(r"<link\b(?=[^>]*\brel=['\"][^'\"]*stylesheet)(?=[^>]*\bhref=['\"]([^'\"]+))[^>]*>", re.IGNORECASE)
 
 
 @dataclass
@@ -67,6 +69,7 @@ class BuildResult:
     copied: list[Path] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     dependencies: set[Path] = field(default_factory=set)
+    page_dependencies: dict[Path, set[Path]] = field(default_factory=dict)
 
     @property
     def output_count(self) -> int:
@@ -89,18 +92,21 @@ class Project:
             self.bundled_templates,
         ]
         self.liquid = make_liquid((path for path in template_dirs if path is not None), self.site)
+        self.loader = self.liquid.loader
+        assert isinstance(self.loader, TrackingLoader)
         self.renderer = ContentRenderer(settings, self.liquid)
         self.math_fonts: set[str] = set()
         self.has_chtml = False
 
-    def build(self) -> BuildResult:
+    def build(self, only: set[Path] | None = None) -> BuildResult:
         self._validate_paths()
         result = BuildResult()
         pages = self._discover_pages()
         self._populate_site(pages)
-        if self.settings.clean and self.settings.output_mode == "site" and self.settings.output.exists():
+        selected = pages if only is None else [page for page in pages if page.source.resolve() in only]
+        if only is None and self.settings.clean and self.settings.output_mode == "site" and self.settings.output.exists():
             shutil.rmtree(self.settings.output)
-        for page in pages:
+        for page in selected:
             rendered = self._render_page(page)
             page.rendered = rendered
             if self.settings.output_mode == "site" and rendered.features.math_css:
@@ -130,13 +136,14 @@ class Project:
             result.written.append(target)
             result.warnings.extend(rendered.warnings)
             result.dependencies.update(rendered.dependencies)
-        if self.settings.output_mode == "site":
+            result.page_dependencies[page.source.resolve()] = rendered.dependencies
+        if only is None and self.settings.output_mode == "site":
             self._prune_math_assets()
-        if self.settings.input.is_dir():
+        if only is None and self.settings.input.is_dir():
             self._copy_static(pages, result)
-        if self.settings.output_mode == "site":
+        if self.settings.output_mode == "site" and (only is None or any(page.relative.parts[:1] == ("_posts",) for page in selected)):
             self._write_feed(pages, result)
-        if self.settings.input.is_dir():
+        if only is None and self.settings.input.is_dir():
             self._prune_execution_pages(pages, result.warnings)
         return result
 
@@ -282,6 +289,7 @@ class Project:
         return datetime(*map(int, match.groups()), tzinfo=timezone.utc) if match else datetime.fromtimestamp(page.source.stat().st_mtime, timezone.utc)
 
     def _render_page(self, page: Page) -> Rendered:
+        self.loader.dependencies.clear()
         page_data = page.data()
         context = {"site": self.site, "page": page_data}
         rendered = self.renderer.render(
@@ -290,10 +298,15 @@ class Project:
         page_data["title"] = rendered.title
         page.metadata["title"] = rendered.title
         if self.settings.output_mode == "site":
-            content = self._apply_layouts(rendered.html, page_data, page.source, rendered.warnings)
+            content = self._apply_layouts(rendered.html, page_data, page.source, rendered)
         else:
             content = self._page_template(rendered, page_data)
         rendered.html = content.rstrip() + "\n"
+        rendered.dependencies.update(self.loader.dependencies)
+        for href in STYLESHEET.findall(rendered.html):
+            name = href.split("?", 1)[0].split("#", 1)[0]
+            if name and "://" not in name and not name.startswith("//"):
+                self._track_css((self.source_root if name.startswith("/") else page.source.parent) / name.lstrip("/"), rendered.dependencies)
         return rendered
 
     def _prune_execution_pages(self, pages: list[Page], warnings: list[str]) -> None:
@@ -320,24 +333,27 @@ class Project:
             except OSError as error:
                 warnings.append(f"could not remove legacy execution cache {legacy}: {error}")
 
-    def _apply_layouts(self, content: str, page: dict[str, Any], source: Path, warnings: list[str]) -> str:
+    def _apply_layouts(self, content: str, page: dict[str, Any], source: Path, rendered: Rendered) -> str:
         layout_name = page.get("layout")
         seen: set[str] = set()
         while layout_name:
             name = str(layout_name)
             if name in seen:
-                warnings.append(f"layout cycle while rendering {source}: {name}")
+                rendered.warnings.append(f"layout cycle while rendering {source}: {name}")
+                content += f'<aside class="warning">Layout cycle omitted: {html.escape(name)}</aside>'
                 break
             seen.add(name)
             path = self._find_layout(name)
             if not path:
-                warnings.append(f"layout not found for {source}: {name}")
+                rendered.warnings.append(f"layout not found for {source}: {name}")
                 break
+            rendered.dependencies.add(path.resolve())
             metadata, template = parse_frontmatter(path.read_text(encoding="utf-8"))
             try:
                 content = self.liquid.from_string(liquid_source(template)).render(site=self.site, page=page, content=content, layout=metadata)
             except LiquidError as error:
-                warnings.append(f"layout failed for {source}: {error}")
+                rendered.warnings.append(f"layout failed for {source}: {error}")
+                content += f'<aside class="warning">Layout cycle or error: {html.escape(str(error))}</aside>'
                 break
             layout_name = metadata.get("layout")
         return content
@@ -355,7 +371,8 @@ class Project:
         path = self._find_layout(self.settings.template)
         if path is None:
             raise ValueError(f"template not found: {self.settings.template}")
-        css = self._css(rendered.features, path)
+        rendered.dependencies.add(path.resolve())
+        css = self._css(rendered, path)
         backend = self.settings.math.backend.lower()
         context = {
             "site": self.site,
@@ -366,9 +383,11 @@ class Project:
         try:
             return self.liquid.from_string(liquid_source(path.read_text(encoding="utf-8"))).render(**context)
         except LiquidError as error:
-            raise ValueError(f"template failed: {error}") from error
+            rendered.warnings.append(f"template failed: {error}")
+            return rendered.html + f'<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
 
-    def _css(self, features: Features, template: Path) -> str:
+    def _css(self, rendered: Rendered, template: Path) -> str:
+        features = rendered.features
         paths: list[Path] = []
         if self.settings.css is None:
             companion = template.with_suffix(".css")
@@ -395,12 +414,27 @@ class Project:
         values = []
         for path in paths:
             try:
-                values.append(path.read_text(encoding="utf-8"))
+                value = path.read_text(encoding="utf-8")
+                values.append(value)
+                self._track_css(path, rendered.dependencies, value)
             except OSError as error:
                 raise ValueError(f"could not read CSS {path}: {error}") from error
         if features.math_css:
             values.append(self._standalone_math_css(features))
         return "\n".join(values)
+
+    def _track_css(self, path: Path, dependencies: set[Path], value: str | None = None) -> None:
+        path = path.resolve()
+        if path in dependencies:
+            return
+        dependencies.add(path)
+        try:
+            value = value if value is not None else path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        for name in CSS_IMPORT.findall(value):
+            if "://" not in name and not name.startswith("//"):
+                self._track_css((self.source_root if name.startswith("/") else path.parent) / name.lstrip("/"), dependencies)
 
     @staticmethod
     def _font_family(name: str) -> str:

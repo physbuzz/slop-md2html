@@ -50,7 +50,11 @@ md2html -es article.md
 
 The command prints a clickable loopback URL. Refresh the browser after an edit
 to see the new page. Use `--watch` instead of `--serve` to rebuild without an
-HTTP server.
+HTTP server. Watch mode uses filesystem notifications and rebuilds only pages
+that depend on a changed file. `@src` files are direct dependencies;
+`@include`, Liquid includes and layouts, and local CSS imports are followed
+recursively. Rebuilding a page replaces its old watch rules, so removed
+includes stop triggering it.
 
 Render every Markdown file below a directory while preserving its relative
 path:
@@ -346,8 +350,9 @@ print(result.written)
 ```
 
 `Settings` is immutable. `Project.build()` returns written files, copied files,
-warnings, and discovered dependencies, which is enough for other tools to add
-their own reporting or watch strategy.
+warnings, discovered dependencies, and dependencies grouped by source page.
+Markdown and Liquid include cycles produce warnings and visible error markup
+while the remaining website continues building.
 
 ## Design boundaries
 
