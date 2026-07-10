@@ -115,6 +115,12 @@ def test_directives_resolve_from_including_file_and_make_toc(tmp_path: Path):
     assert '<details class="source">' in output
 
 
+def test_highlighted_code_uses_one_box(tmp_path: Path):
+    output = build_one(tmp_path, "# Code\n\n```python\nprint('hello')\n```\n")
+    assert '<pre class="highlight">' in output
+    assert '<div class="highlight">' not in output
+
+
 def test_page_dependencies_follow_includes_templates_and_css_but_not_source_internals(tmp_path: Path):
     templates = tmp_path / "templates"
     parts = tmp_path / "parts"

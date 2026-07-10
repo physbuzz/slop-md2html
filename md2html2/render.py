@@ -177,7 +177,8 @@ def _lexer(language: str, filename: Path | None = None):
 
 
 def code_html(code: str, language: str = "text", filename: Path | None = None) -> str:
-    return highlight(code.rstrip("\n") + "\n", _lexer(language, filename), HtmlFormatter(cssclass="highlight"))
+    body = highlight(code.rstrip("\n") + "\n", _lexer(language, filename), HtmlFormatter(nowrap=True))
+    return f'<pre class="highlight">{body}</pre>\n'
 
 
 def split_args(value: str) -> tuple[str, set[str]]:
