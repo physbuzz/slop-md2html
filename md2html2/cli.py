@@ -22,7 +22,7 @@ from .project import BuildResult, Project
 from .settings import EXAMPLE_CONFIG, EXAMPLE_JSON, MathSettings, Settings, find_config, load_settings, normal_path
 
 PAGE_CSS = (
-    "page-base.css", "feature-code.css", "feature-math.css",
+    "page-base.css", "feature-syntax.css", "feature-code.css", "feature-math.css",
     "feature-toc.css", "feature-image.css", "feature-warning.css",
 )
 

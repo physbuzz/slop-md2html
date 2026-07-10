@@ -392,6 +392,7 @@ class Project:
             elif template.name == "page.html":
                 paths.append(self.bundled_assets / "page-base.css")
                 if features.code or features.output:
+                    paths.append(self.bundled_assets / "feature-syntax.css")
                     paths.append(self.bundled_assets / "feature-code.css")
                 if features.math:
                     paths.append(self.bundled_assets / "feature-math.css")

@@ -349,7 +349,9 @@ their selections between pages.
 Highlighted fences use a `codehilite` wrapper. Source directives use a
 `code-box` containing `code-header`, `codehilite`, and, when execution produced
 text, `code-output`. Explicitly collapsible source uses `collapsible-code`
-inside that same outer box. These class names are stable hooks for custom CSS.
+inside that same outer box. The default page includes the complete standard
+light token palette and its dark counterpart. These class names are stable
+hooks for custom CSS.
 
 ## Print the examples and documentation
 

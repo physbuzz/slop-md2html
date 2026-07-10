@@ -480,7 +480,10 @@ class ContentRenderer:
         code_markup = code_html(code, language, source)
         collapsible = bool(flags & {"collapsed", "collapsible", "expanded"})
         label = html.escape(label or ("Source" if collapsible else f"{language} source"))
-        link = f'<a href="{html.escape(href, quote=True)}">{label}</a>' if href else label
+        if href:
+            link = f'<a href="{html.escape(href, quote=True)}">{label}</a>'
+        else:
+            link = f"<span>{label}</span>" if collapsible else label
         if collapsible:
             open_attr = "" if "collapsed" in flags else " open"
             code_markup = (

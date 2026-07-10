@@ -122,6 +122,7 @@ def test_directives_resolve_from_including_file_and_make_toc(tmp_path: Path):
     assert '<summary class="code-summary"><a href="parts/example.py">example.py</a>' in output
     assert '<div class="codehilite"><pre>' in output
     assert 'class="source"' not in output and 'class="highlight"' not in output
+    assert 'content: "►"' in output
     assert '<div class="table-of-contents">' in output
 
 
@@ -135,6 +136,7 @@ def test_toc_compacts_exercises_like_the_original_page(tmp_path: Path):
     assert output.count('class="exercise-list"') == 1
     assert "Exercise 1.1</a></span>" in output and "Exercise 1.2</a></span>" in output
     assert '>Solution</a>' not in output
+    assert ".table-of-contents h2" not in output
 
 
 def test_adjacent_blockquotes_match_kramdown(tmp_path: Path):
@@ -147,6 +149,8 @@ def test_highlighted_code_uses_one_box(tmp_path: Path):
     output = build_one(tmp_path, "# Code\n\n```python\nprint('hello')\n```\n")
     assert '<div class="codehilite"><pre>' in output
     assert '<div class="code-box">' not in output
+    assert ".codehilite .k { color: #008000; font-weight: bold }" in output
+    assert 'html[data-theme="dark"] .codehilite .k' in output
 
 
 def test_inline_source_uses_the_code_box_contract(tmp_path: Path):
@@ -632,6 +636,7 @@ def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFix
     assert ".table-of-contents" in example_css
     assert ".code-box .codehilite" in example_css
     assert ".code-output pre" in example_css
+    assert ".codehilite .kc { color: #008000; font-weight: bold }" in example_css
 
 
 def test_help_and_readme_explain_watch_serve_and_examples(capsys: pytest.CaptureFixture[str]):

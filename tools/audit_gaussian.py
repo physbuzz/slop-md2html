@@ -44,6 +44,11 @@ def main() -> int:
         "CHTML styles precede site script": text.find("mathjax-chtml.css") < text.find("site.js"),
         "site script is deferred": '<script defer src="/js/site.js"></script>' in text,
         "reader :has() selectors stay bounded": site_css.count(":has(") == 8 and site_css.count("body:has(#reader-") == 8,
+        "Directory keeps the compact shared rhythm": all(rule in site_css for rule in (
+            ".post-content h2#directory {\n  font-size: 1.8rem;",
+            ".post-content h2#directory + ul {\n  margin: 0;\n  padding-left: 20px;\n  font-size: inherit;\n  line-height: 1;",
+            ".post-content h2#directory + ul li {\n  margin: 0 0 2px;",
+        )),
         "text-size control present": text.count('name="reader-text"') == 3,
         "reader widget is native HTML": '<details class="reader-widget">' in text and '<form aria-label="Reader controls">' in text,
         "content visible without JavaScript": not re.search(r"<html\b[^>]*(?:data-hash-pending|class=[\"'][^\"']*js)", text),
