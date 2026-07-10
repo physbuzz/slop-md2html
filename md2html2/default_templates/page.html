@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="{{ page.lang | default: 'en' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page.title }}</title>
+  <script>
+  (function () {
+    var defaults = {theme: 'system', width: 'normal', type: 'sans'};
+    Object.keys(defaults).forEach(function (name) {
+      try {
+        var value = localStorage.getItem('md2html-reader-' + name);
+        if (value && value !== defaults[name]) document.documentElement.dataset[name] = value;
+      } catch (_) {}
+    });
+  }());
+  </script>
+  {% if md2html.use_mathjax %}<script>
+  window.MathJax = {tex: {inlineMath: [['$', '$']], displayMath: [['$$', '$$']], processEscapes: true}};
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>{% endif %}
+  {% if md2html.css %}<style>{{ md2html.css }}</style>{% endif %}
+</head>
+<body>
+  <main class="page-shell">
+    <header class="page-header">
+      <div class="page-heading">{{ page.title }}</div>
+      <details class="reader-controls">
+        <summary aria-label="Reader controls" title="Reader controls">Aa</summary>
+        <fieldset>
+          <legend>Theme</legend>
+          <label><input name="reader-theme" value="system" type="radio" checked> system</label>
+          <label><input name="reader-theme" value="light" type="radio"> light</label>
+          <label><input name="reader-theme" value="dark" type="radio"> dark</label>
+        </fieldset>
+        <fieldset>
+          <legend>Measure</legend>
+          <label><input name="reader-width" value="normal" type="radio" checked> normal</label>
+          <label><input name="reader-width" value="wide" type="radio"> wide</label>
+          <label><input name="reader-width" value="compact" type="radio"> compact</label>
+        </fieldset>
+        <fieldset>
+          <legend>Type</legend>
+          <label><input name="reader-type" value="sans" type="radio" checked> sans</label>
+          <label><input name="reader-type" value="serif" type="radio"> serif</label>
+        </fieldset>
+      </details>
+    </header>
+    <article class="page-content">{{ content }}</article>
+  </main>
+  <script>
+  (function () {
+    var defaults = {theme: 'system', width: 'normal', type: 'sans'};
+    Object.keys(defaults).forEach(function (name) {
+      var current = defaults[name];
+      try { current = localStorage.getItem('md2html-reader-' + name) || current; } catch (_) {}
+      document.querySelectorAll('input[name="reader-' + name + '"]').forEach(function (input) {
+        input.checked = input.value === current;
+        input.addEventListener('change', function () {
+          if (!input.checked) return;
+          if (input.value === defaults[name]) delete document.documentElement.dataset[name];
+          else document.documentElement.dataset[name] = input.value;
+          try { localStorage.setItem('md2html-reader-' + name, input.value); } catch (_) {}
+          if (window.MathJax && window.MathJax.typesetPromise) window.MathJax.typesetPromise().catch(function () {});
+        });
+      });
+    });
+  }());
+  </script>
+</body>
+</html>

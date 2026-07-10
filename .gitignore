@@ -1,0 +1,29 @@
+# Python environments, bytecode, and package output
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Test, coverage, lint, and type-checker output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# JavaScript dependencies and logs
+node_modules/
+npm-debug.log*
+
+# md2html execution output
+.md2html-cache/
+
+# Editors and operating systems
+*.swp
+*.swo
+*~
+.DS_Store
