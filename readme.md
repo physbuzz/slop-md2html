@@ -148,7 +148,8 @@ included fragment is ignored.
 ```
 
 `collapsed` starts in a closed disclosure box, `expanded` starts in an open
-one, and a directive without either flag displays normally.
+one, and a directive without either flag displays normally. A single-line
+`@src(` tag missing its closing parenthesis becomes a visible page error.
 
 ### Show inline source
 

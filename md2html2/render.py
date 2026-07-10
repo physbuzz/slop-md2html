@@ -40,6 +40,7 @@ SRC_BLOCK = re.compile(r"^@src-begin\(([^)]*)\)[ \t]*\r?\n(.*?)^@src-end[ \t]*$"
 SRC_BEGIN_LINE = re.compile(r"^[ \t]*@src-begin\([^)]*\)[ \t]*$")
 SRC_END_LINE = re.compile(r"^[ \t]*@src-end[ \t]*$")
 DIRECTIVE = re.compile(r"^[ \t]*@(include|src)\(([^)]*)\)[ \t]*$", re.MULTILINE)
+MALFORMED_SRC = re.compile(r"^[ \t]*@src\([^\n)]*$", re.MULTILINE)
 TOC = re.compile(r"^[ \t]*@toc[ \t]*$", re.MULTILINE)
 HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
 ALIGN = re.compile(r"\\begin\{(align\*?|gather\*?|multline\*?|equation\*?)\}.*?\\end\{\1\}", re.DOTALL)
@@ -178,6 +179,7 @@ class Executor:
         self.cache = self.page_root(settings, page)
         self.active: set[Path] = set()
         self.inline_count = 0
+        self.cleanup_safe = True
 
     @staticmethod
     def _slug(value: str) -> str:
@@ -272,6 +274,8 @@ class Executor:
             return None
 
     def finish(self) -> None:
+        if not self.cleanup_safe:
+            return
         try:
             if not self.cache.exists():
                 return
@@ -318,6 +322,15 @@ class ContentRenderer:
         dependencies: set[Path] = {source}
         warnings: list[str] = []
         executor = Executor(self.settings, cache_page, warnings.append)
+
+        def malformed_src(match: re.Match[str]) -> str:
+            line = body.count("\n", 0, match.start()) + 1
+            message = f"error at {source}:{line}: malformed @src tag"
+            warnings.append(message)
+            executor.cleanup_safe = False
+            return f'<p style="color:red;font-weight:bold;font-size:20px;">{html.escape(message)}</p>'
+
+        body = MALFORMED_SRC.sub(malformed_src, body)
 
         def protect_raw(match: re.Match[str]) -> str:
             return stash.put(match.group(0), block=match.group(1).lower() == "pre")

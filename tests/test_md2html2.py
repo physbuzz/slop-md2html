@@ -258,6 +258,21 @@ def test_unterminated_source_block_preserves_page_cache(tmp_path: Path):
     assert workspaces(cache) == cached
 
 
+def test_malformed_src_tag_is_a_visible_error_and_preserves_cache(tmp_path: Path):
+    (tmp_path / "program.py").write_text("print('valid')\n", encoding="utf-8")
+    build_one(tmp_path, "# Run\n\n@src(program.py, execute)\n", execute=True)
+    cache = page_cache(tmp_path)
+    cached = workspaces(cache)
+    source = tmp_path / "article.md"
+    source.write_text("# Run\n\n@src(program.py, execute\n", encoding="utf-8")
+    result = Project(Settings.single(source).with_cli(execute=True)).build()
+    output = result.written[0].read_text(encoding="utf-8")
+    assert 'style="color:red;font-weight:bold;font-size:20px;"' in output
+    assert "error at" in output and "malformed @src tag" in output
+    assert any("article.md:3" in warning for warning in result.warnings)
+    assert workspaces(cache) == cached
+
+
 def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
     source = tmp_path / "site"
     output = tmp_path / "public"
