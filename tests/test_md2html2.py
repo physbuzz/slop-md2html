@@ -48,6 +48,9 @@ def test_single_file_writes_only_sibling_html(tmp_path: Path):
     assert output.count(":has(") == 8
     assert '<details class="reader-widget">' in output and '<form aria-label="reader controls">' in output
     assert "border-radius: 4px" in output and ".reader-widget form" in output
+    assert "--reader-text-size: .9rem" in output
+    assert 'html[data-text="small"] { --reader-text-size: .8rem; }' in output
+    assert 'html[data-text="large"] { --reader-text-size: 1rem; }' in output
 
 
 def test_frontmatter_title_and_yaml_types(tmp_path: Path):

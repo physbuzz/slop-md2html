@@ -17,7 +17,7 @@
   --reader-warning-border: #d29922;
   --reader-code-output: #de37cc;
   --reader-measure: 800px;
-  --reader-text-size: 16px;
+  --reader-text-size: .9rem;
   --reader-body-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --reader-ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --reader-mono-font: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
@@ -109,10 +109,10 @@ html[data-type="serif"] { --reader-body-font: ui-serif, Georgia, Cambria, "Times
 html[data-type="sans"] { --reader-body-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
 body:has(#type-serif:checked) { --reader-body-font: ui-serif, Georgia, Cambria, "Times New Roman", serif; }
 body:has(#type-sans:checked) { --reader-body-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-html[data-text="small"] { --reader-text-size: 15px; }
-html[data-text="large"] { --reader-text-size: 18px; }
-body:has(#text-small:checked) { --reader-text-size: 15px; }
-body:has(#text-large:checked) { --reader-text-size: 18px; }
+html[data-text="small"] { --reader-text-size: .8rem; }
+html[data-text="large"] { --reader-text-size: 1rem; }
+body:has(#text-small:checked) { --reader-text-size: .8rem; }
+body:has(#text-large:checked) { --reader-text-size: 1rem; }
 
 * {
   box-sizing: border-box;
