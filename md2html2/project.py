@@ -41,19 +41,13 @@ class Page:
 
     def data(self) -> dict[str, Any]:
         data = dict(self.metadata)
-        data.setdefault("title", self._source_title())
+        data.setdefault("title", self.source.name)
         data["url"] = self.url
         data.setdefault("path", self.relative.as_posix())
         data.setdefault("tags", [])
         data.setdefault("categories", [])
         data.setdefault("excerpt", self._excerpt())
         return data
-
-    def _source_title(self) -> str:
-        match = re.search(r"^#[ \t]+(.+?)[ \t]*#*[ \t]*$", self.body, re.MULTILINE)
-        if match:
-            return re.sub(r"<[^>]+>|[*_`]", "", match.group(1)).strip()
-        return self.source.stem.replace("-", " ").title()
 
     def _excerpt(self) -> str:
         for paragraph in re.split(r"\n\s*\n", self.body):

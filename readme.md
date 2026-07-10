@@ -102,7 +102,7 @@ title: A Small Example
 Some text with `inline code` and $e^{i\pi}+1=0$.
 ```
 
-If `title` is absent, the first heading becomes the document title. A fenced
+If `title` is absent, the source filename becomes the document title. A fenced
 code block is protected before template expressions are evaluated, so braces
 from Mathematica and other languages remain literal:
 

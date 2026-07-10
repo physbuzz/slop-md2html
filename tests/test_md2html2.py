@@ -40,7 +40,7 @@ def workspaces(page: Path) -> list[Path]:
 def test_single_file_writes_only_sibling_html(tmp_path: Path):
     output = build_one(tmp_path, "# A useful title\n\nHello.\n")
     assert sorted(path.name for path in tmp_path.iterdir()) == ["article.html", "article.md"]
-    assert "<title>A useful title</title>" in output
+    assert "<title>article.md</title>" in output
     assert "<h1 id=\"a-useful-title\">" in output
     assert "tex-mml-chtml.js" not in output
     assert "Measure" in output and "reader-width" in output and "reader-type" in output

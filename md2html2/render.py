@@ -394,7 +394,7 @@ class ContentRenderer:
         output = stash.restore(output)
         features.images = bool(re.search(r"<img\b", output, re.IGNORECASE))
         features.warning = 'class="warning"' in output
-        title = str(context.get("page", {}).get("title") or self._first_title(body) or source.stem)
+        title = str(context.get("page", {}).get("title") or source.name)
         return Rendered(output, title, features, dependencies, warnings, executor)
 
     @staticmethod
@@ -528,11 +528,6 @@ class ContentRenderer:
                         break
                 end += width
         return ALIGN.sub(lambda match: emit(match.group(0), True), "".join(result))
-
-    @staticmethod
-    def _first_title(body: str) -> str | None:
-        match = HEADING.search(body)
-        return re.sub(r"[*_`<>{}]", "", match.group(2)).strip() if match else None
 
     @staticmethod
     def _toc(body: str) -> str:
