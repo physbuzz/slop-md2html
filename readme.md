@@ -170,27 +170,33 @@ C, C++, and Wolfram Language have conventional default commands. A missing
 runtime, compilation error, nonzero exit, or timeout becomes a warning; the
 page still builds.
 
-Executable content gets an isolated, persistent workspace under
-`.md2html-cache/build`. The command runs with that workspace as its current
-directory, so compiled programs and files created with relative paths do not
-pollute the source tree. Successful output is cached there. `--regenerate` (or
-`-f`) cleans the workspace and runs the command again.
+Executable content gets an isolated, persistent workspace under a cache tree
+that follows the website's output paths. For example, executable blocks in
+`guide/index.html` use `.md2html-cache/pages/guide/index.html/`. Each block has
+a fingerprinted subdirectory. The command runs there, so compiled programs and
+files created with relative paths do not pollute the source tree. Successful
+output is cached; `--regenerate` (or `-f`) reruns the command.
 
 Commands can be added or replaced in configuration. `{source}`, `{output}`,
-`{sourcedir}`, `{builddir}`, `{slug}`, and `{python}` are available in command
-strings. For `@src`, `{source}` is the absolute original file; inline source is
-staged inside the workspace. `{slug}` is the safe source stem and `{output}` is
-an `output.txt` file inside the build directory:
+`{sourcedir}`, `{builddir}`, `{slug}`, `{executable}`, and `{python}` are
+available in command strings. `{filename}` is an alias for `{source}`. For
+`@src`, the source is the absolute original file; inline source is staged
+inside the workspace. `{executable}` is a `slug.md2html-out` path and `{output}`
+is an `output.txt` path in the same directory:
 
 ```yaml
 commands:
   julia: julia {source}
-  cpp: g++ {source} -o {slug} && ./{slug} > {output}
+  cpp: g++ {source} -o {executable} && {executable} > {output}
 ```
 
 If a command creates `{output}`, its contents appear below the source.
 Otherwise md2html uses stdout and saves it to `{output}`. Other generated files
 remain in the workspace for inspection but are not copied into the website.
+After a page is written, workspaces for blocks no longer on that page are
+removed. A completed project build also removes cache trees for deleted pages.
+Failed executable examples remain available for inspection and do not prevent
+this cleanup; a page parse or rendering failure preserves its previous cache.
 
 Only use executable content from sources you trust.
 

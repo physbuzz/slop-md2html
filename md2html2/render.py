@@ -37,6 +37,8 @@ RAW_HIGHLIGHT = re.compile(r"<div\b[^>]*class=[\"'][^\"']*(?:codehilite|highligh
 RAW_COMMENT = re.compile(r"<!--[\s\S]*?-->")
 HIGHLIGHT = re.compile(r"{%\s*highlight\s+([\w+.-]+)\s*%}(.*?){%\s*endhighlight\s*%}", re.DOTALL)
 SRC_BLOCK = re.compile(r"^@src-begin\(([^)]*)\)[ \t]*\r?\n(.*?)^@src-end[ \t]*$", re.MULTILINE | re.DOTALL)
+SRC_BEGIN_LINE = re.compile(r"^[ \t]*@src-begin\([^)]*\)[ \t]*$")
+SRC_END_LINE = re.compile(r"^[ \t]*@src-end[ \t]*$")
 DIRECTIVE = re.compile(r"^[ \t]*@(include|src)\(([^)]*)\)[ \t]*$", re.MULTILINE)
 TOC = re.compile(r"^[ \t]*@toc[ \t]*$", re.MULTILINE)
 HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
@@ -52,10 +54,10 @@ COMMANDS = {
     ".js": "node {source}",
     ".wl": "wolframscript -file {source}",
     ".m": "wolframscript -file {source}",
-    ".c": "cc {source} -o {slug} && ./{slug}",
-    ".cc": "c++ {source} -o {slug} && ./{slug}",
-    ".cpp": "c++ {source} -o {slug} && ./{slug}",
-    ".cxx": "c++ {source} -o {slug} && ./{slug}",
+    ".c": "cc {source} -o {executable} && {executable}",
+    ".cc": "c++ {source} -o {executable} && {executable}",
+    ".cpp": "c++ {source} -o {executable} && {executable}",
+    ".cxx": "c++ {source} -o {executable} && {executable}",
 }
 
 
@@ -122,6 +124,7 @@ class Rendered:
     features: Features
     dependencies: set[Path] = field(default_factory=set)
     warnings: list[str] = field(default_factory=list)
+    executor: Executor | None = field(default=None, repr=False)
 
 
 class Stash:
@@ -166,45 +169,63 @@ def split_args(value: str) -> tuple[str, set[str]]:
 
 
 class Executor:
-    def __init__(self, settings: Settings, warn: Callable[[str], None]) -> None:
+    CACHE_VERSION = 2
+
+    def __init__(self, settings: Settings, page: Path, warn: Callable[[str], None]) -> None:
         self.settings = settings
         self.warn = warn
-        self.cache = settings.project_root / ".md2html-cache" / "build"
+        self.page = page
+        self.cache = self.page_root(settings, page)
+        self.active: set[Path] = set()
         self.inline_count = 0
 
     @staticmethod
     def _slug(value: str) -> str:
         return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-.") or "source"
 
-    def _workspace(self, source: Path, language: str, inline: bool) -> tuple[Path, str]:
+    @classmethod
+    def pages_root(cls, settings: Settings) -> Path:
+        return settings.project_root / ".md2html-cache" / "pages"
+
+    @classmethod
+    def page_root(cls, settings: Settings, page: Path) -> Path:
+        parts = [cls._slug(part) for part in page.parts if part not in {"", ".", "..", page.anchor}]
+        return cls.pages_root(settings).joinpath(*(parts or ["index.html"]))
+
+    def _workspace(
+        self, source: Path, code: str, language: str, inline: bool, command: str | None,
+    ) -> tuple[Path, str, dict[str, Any]]:
         if inline:
             self.inline_count += 1
-            slug = self._slug(f"{source.stem}-{language or 'source'}-{self.inline_count}")
-            identity = f"{source.resolve()}\0{language}\0inline\0{self.inline_count}"
+            slug = self._slug(f"{language or 'source'}-{self.inline_count}")
         else:
             slug = self._slug(source.stem)
-            identity = str(source.resolve())
-        digest = hashlib.sha256(identity.encode()).hexdigest()[:10]
-        return self.cache / f"{slug}-{digest}", slug
-
-    def run(self, source: Path, code: str, language: str, inline: bool) -> str | None:
-        custom = self.settings.commands.get(language) or self.settings.commands.get(source.suffix.lstrip("."))
-        suffix = LANGUAGE_SUFFIXES.get(language.lower(), "." + language) if inline else (source.suffix or "." + language)
-        command = custom or COMMANDS.get(suffix.lower())
-        if not command:
-            self.warn(f"no execution command is configured for {language or suffix}")
-            return None
-        builddir, slug = self._workspace(source, language, inline)
-        output_path = builddir / "output.txt"
-        metadata_path = builddir / "execution.json"
         fingerprint = {
-            "version": 1,
+            "version": self.CACHE_VERSION,
             "source": str(source.resolve()),
             "language": language.lower(),
             "code": code,
             "command": command,
             "python": sys.executable,
         }
+        encoded = json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()
+        digest = hashlib.sha256(encoded).hexdigest()[:12]
+        builddir = self.cache / f"{slug}-{digest}"
+        self.active.add(builddir)
+        return builddir, slug, fingerprint
+
+    def run(self, source: Path, code: str, language: str, inline: bool, *, enabled: bool) -> str | None:
+        custom = self.settings.commands.get(language) or self.settings.commands.get(source.suffix.lstrip("."))
+        suffix = LANGUAGE_SUFFIXES.get(language.lower(), "." + language) if inline else (source.suffix or "." + language)
+        command = custom or COMMANDS.get(suffix.lower())
+        builddir, slug, fingerprint = self._workspace(source, code, language, inline, command)
+        if not enabled:
+            return None
+        if command is None:
+            self.warn(f"no execution command is configured for {language or suffix}")
+            return None
+        output_path = builddir / "output.txt"
+        metadata_path = builddir / "execution.json"
         if not self.settings.regenerate and output_path.is_file() and metadata_path.is_file():
             try:
                 if json.loads(metadata_path.read_text(encoding="utf-8")) == fingerprint:
@@ -219,11 +240,14 @@ class Executor:
             if inline:
                 run_source = builddir / (slug + suffix)
                 run_source.write_text(code, encoding="utf-8")
+            executable = builddir / f"{slug}.md2html-out"
             try:
                 formatted = command.format(
-                    source=shlex.quote(str(run_source)), python=shlex.quote(sys.executable),
+                    source=shlex.quote(str(run_source)), filename=shlex.quote(str(run_source)),
+                    python=shlex.quote(sys.executable),
                     sourcedir=shlex.quote(str(source.parent.resolve())),
                     builddir=shlex.quote(str(builddir.resolve())), slug=shlex.quote(slug),
+                    executable=shlex.quote(str(executable.resolve())),
                     output=shlex.quote(str(output_path.resolve())),
                 )
             except (KeyError, ValueError) as error:
@@ -247,18 +271,53 @@ class Executor:
             self.warn(f"could not execute {source}: {error}")
             return None
 
+    def finish(self) -> None:
+        try:
+            if not self.cache.exists():
+                return
+            for path in self.cache.iterdir():
+                if path.is_dir() and path not in self.active:
+                    try:
+                        shutil.rmtree(path)
+                    except OSError as error:
+                        self.warn(f"could not remove stale execution workspace {path}: {error}")
+            existing = sorted(path.name for path in self.active if path.is_dir())
+            manifest = self.cache / "manifest.json"
+            if existing:
+                value = {"version": self.CACHE_VERSION, "page": self.page.as_posix(), "workspaces": existing}
+                temporary = manifest.with_suffix(".tmp")
+                temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                temporary.replace(manifest)
+            else:
+                manifest.unlink(missing_ok=True)
+                self._remove_empty_parents(self.cache, self.pages_root(self.settings))
+        except OSError as error:
+            self.warn(f"could not clean execution cache for {self.page}: {error}")
+
+    @staticmethod
+    def _remove_empty_parents(path: Path, stop: Path) -> None:
+        while path != stop.parent:
+            try:
+                path.rmdir()
+            except OSError:
+                break
+            path = path.parent
+
 
 class ContentRenderer:
     def __init__(self, settings: Settings, liquid: Environment) -> None:
         self.settings = settings
         self.liquid = liquid
 
-    def render(self, source: Path, body: str, context: dict[str, Any], *, markdown: bool = True) -> Rendered:
+    def render(
+        self, source: Path, body: str, context: dict[str, Any], *, markdown: bool = True, cache_page: Path,
+    ) -> Rendered:
+        self._validate_source_blocks(source, body)
         stash = Stash()
         features = Features()
         dependencies: set[Path] = {source}
         warnings: list[str] = []
-        executor = Executor(self.settings, warnings.append)
+        executor = Executor(self.settings, cache_page, warnings.append)
 
         def protect_raw(match: re.Match[str]) -> str:
             return stash.put(match.group(0), block=match.group(1).lower() == "pre")
@@ -310,7 +369,22 @@ class ContentRenderer:
         features.images = bool(re.search(r"<img\b", output, re.IGNORECASE))
         features.warning = 'class="warning"' in output
         title = str(context.get("page", {}).get("title") or self._first_title(body) or source.stem)
-        return Rendered(output, title, features, dependencies, warnings)
+        return Rendered(output, title, features, dependencies, warnings, executor)
+
+    @staticmethod
+    def _validate_source_blocks(source: Path, body: str) -> None:
+        begin = None
+        for number, line in enumerate(body.splitlines(), 1):
+            if SRC_BEGIN_LINE.match(line):
+                if begin is not None:
+                    raise ValueError(f"nested @src-begin in {source}:{number}")
+                begin = number
+            elif SRC_END_LINE.match(line):
+                if begin is None:
+                    raise ValueError(f"unexpected @src-end in {source}:{number}")
+                begin = None
+        if begin is not None:
+            raise ValueError(f"missing @src-end for {source}:{begin}")
 
     def _expand_directives(
         self, body: str, origin: Path, context: dict[str, Any], stash: Stash, features: Features,
@@ -332,6 +406,7 @@ class ContentRenderer:
             dependencies.add(path)
             if kind == "include":
                 _, value = parse_frontmatter(value)
+                self._validate_source_blocks(path, value)
                 return self._expand_directives(
                     value, path, context, stash, features, dependencies, warnings, executor, (*stack, origin.resolve()),
                 )
@@ -358,7 +433,7 @@ class ContentRenderer:
         should_run = self.settings.execute and "noexecute" not in flags
         if "execute" in flags and not self.settings.execute:
             executor.warn(f"execution requested for {source}; rerun with --execute")
-        output = executor.run(source, code, language, inline) if should_run else None
+        output = executor.run(source, code, language, inline, enabled=should_run)
         if output is not None:
             features.output = True
             code_markup += f'<pre class="code-output"><code>{html.escape(output)}</code></pre>'

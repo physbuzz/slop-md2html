@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 import base64
@@ -15,7 +16,7 @@ from typing import Any
 import yaml
 from liquid.exceptions import LiquidError
 
-from .render import ContentRenderer, Features, Rendered, liquid_source, make_liquid, parse_frontmatter, slugify
+from .render import ContentRenderer, Executor, Features, Rendered, liquid_source, make_liquid, parse_frontmatter, slugify
 from .settings import Settings
 
 
@@ -124,6 +125,8 @@ class Project:
             target = self._target(page)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(rendered.html, encoding="utf-8")
+            if rendered.executor:
+                rendered.executor.finish()
             result.written.append(target)
             result.warnings.extend(rendered.warnings)
             result.dependencies.update(rendered.dependencies)
@@ -133,6 +136,8 @@ class Project:
             self._copy_static(pages, result)
         if self.settings.output_mode == "site":
             self._write_feed(pages, result)
+        if self.settings.input.is_dir():
+            self._prune_execution_pages(pages, result.warnings)
         return result
 
     def _validate_paths(self) -> None:
@@ -279,7 +284,9 @@ class Project:
     def _render_page(self, page: Page) -> Rendered:
         page_data = page.data()
         context = {"site": self.site, "page": page_data}
-        rendered = self.renderer.render(page.source, page.body, context, markdown=page.markdown)
+        rendered = self.renderer.render(
+            page.source, page.body, context, markdown=page.markdown, cache_page=page.output_relative,
+        )
         page_data["title"] = rendered.title
         page.metadata["title"] = rendered.title
         if self.settings.output_mode == "site":
@@ -288,6 +295,30 @@ class Project:
             content = self._page_template(rendered, page_data)
         rendered.html = content.rstrip() + "\n"
         return rendered
+
+    def _prune_execution_pages(self, pages: list[Page], warnings: list[str]) -> None:
+        root = Executor.pages_root(self.settings)
+        active = {Executor.page_root(self.settings, page.output_relative) for page in pages}
+        if root.exists():
+            for manifest in list(root.rglob("manifest.json")):
+                page_root = manifest.parent
+                if page_root not in active:
+                    try:
+                        shutil.rmtree(page_root)
+                    except OSError as error:
+                        warnings.append(f"could not remove stale execution page {page_root}: {error}")
+            directories = (path for path in root.rglob("*") if path.is_dir())
+            for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+                with suppress(OSError):
+                    directory.rmdir()
+            with suppress(OSError):
+                root.rmdir()
+        legacy = self.settings.project_root / ".md2html-cache" / "build"
+        if legacy.exists():
+            try:
+                shutil.rmtree(legacy)
+            except OSError as error:
+                warnings.append(f"could not remove legacy execution cache {legacy}: {error}")
 
     def _apply_layouts(self, content: str, page: dict[str, Any], source: Path, warnings: list[str]) -> str:
         layout_name = page.get("layout")

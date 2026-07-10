@@ -28,6 +28,14 @@ def build_one(tmp_path: Path, text: str, **changes) -> str:
     return result.written[0].read_text(encoding="utf-8")
 
 
+def page_cache(tmp_path: Path, relative: str = "article.html") -> Path:
+    return tmp_path / ".md2html-cache" / "pages" / relative
+
+
+def workspaces(page: Path) -> list[Path]:
+    return sorted(path for path in page.iterdir() if path.is_dir())
+
+
 def test_single_file_writes_only_sibling_html(tmp_path: Path):
     output = build_one(tmp_path, "# A useful title\n\nHello.\n")
     assert sorted(path.name for path in tmp_path.iterdir()) == ["article.html", "article.md"]
@@ -122,11 +130,11 @@ def test_executable_inline_content_uses_a_persistent_workspace(tmp_path: Path):
         execute=True,
     )
     assert "code-output" in output and "42" in output
-    workspaces = list((tmp_path / ".md2html-cache" / "build").iterdir())
-    assert len(workspaces) == 1
-    assert (workspaces[0] / "output.txt").read_text() == "42\n"
-    assert (workspaces[0] / "execution.json").is_file()
-    assert list(workspaces[0].glob("*.py"))
+    cached = workspaces(page_cache(tmp_path))
+    assert len(cached) == 1
+    assert (cached[0] / "output.txt").read_text() == "42\n"
+    assert (cached[0] / "execution.json").is_file()
+    assert list(cached[0].glob("*.py"))
 
 
 def test_file_execution_runs_in_a_stable_clean_workspace(tmp_path: Path):
@@ -136,9 +144,9 @@ def test_file_execution_runs_in_a_stable_clean_workspace(tmp_path: Path):
         encoding="utf-8",
     )
     output = build_one(tmp_path, "# Run\n\n@src(program.py, execute)\n", execute=True)
-    workspaces = list((tmp_path / ".md2html-cache" / "build").iterdir())
-    assert len(workspaces) == 1
-    workspace = workspaces[0]
+    cached = workspaces(page_cache(tmp_path))
+    assert len(cached) == 1
+    workspace = cached[0]
     assert workspace.name in output
     assert (workspace / "old-image.txt").read_text() == "old"
     assert not (tmp_path / "old-image.txt").exists()
@@ -152,11 +160,11 @@ def test_file_execution_runs_in_a_stable_clean_workspace(tmp_path: Path):
         encoding="utf-8",
     )
     output = build_one(tmp_path, "# Run\n\n@src(program.py, execute)\n", execute=True)
-    assert list((tmp_path / ".md2html-cache" / "build").iterdir()) == [workspace]
+    changed = workspaces(page_cache(tmp_path))
+    assert len(changed) == 1 and changed[0] != workspace
     assert "changed" in output
-    assert not (workspace / "old-image.txt").exists()
-    assert not (workspace / "cache-hit.txt").exists()
-    assert (workspace / "new-image.txt").read_text() == "new"
+    assert not workspace.exists()
+    assert (changed[0] / "new-image.txt").read_text() == "new"
 
 
 def test_custom_command_can_write_output_and_inspect_workspace(tmp_path: Path):
@@ -166,7 +174,7 @@ def test_custom_command_can_write_output_and_inspect_workspace(tmp_path: Path):
         tmp_path, "# Run\n\n@src(example.demo, execute)\n", execute=True,
         commands={"demo": command},
     )
-    workspace = next((tmp_path / ".md2html-cache" / "build").iterdir())
+    workspace = workspaces(page_cache(tmp_path))[0]
     assert "example" in output
     assert (workspace / "output.txt").read_text() == "example"
     assert Path((workspace / "workspace.txt").read_text()) == workspace
@@ -177,15 +185,77 @@ def test_custom_command_can_write_output_and_inspect_workspace(tmp_path: Path):
 @pytest.mark.skipif(shutil.which("c++") is None, reason="c++ is required")
 def test_cpp_build_products_stay_in_workspace(tmp_path: Path):
     (tmp_path / "message.h").write_text('#define MESSAGE "cpp output\\n"\n', encoding="utf-8")
-    (tmp_path / "file.cpp").write_text(
+    (tmp_path / "a.cpp").write_text(
         '#include <iostream>\n#include "message.h"\nint main() { std::cout << MESSAGE; }\n', encoding="utf-8",
     )
-    output = build_one(tmp_path, "# Run\n\n@src(file.cpp, execute)\n", execute=True)
-    workspace = next((tmp_path / ".md2html-cache" / "build").iterdir())
+    output = build_one(tmp_path, "# Run\n\n@src(a.cpp, execute)\n", execute=True)
+    workspace = workspaces(page_cache(tmp_path))[0]
     assert "cpp output" in output
-    assert (workspace / "file").is_file()
-    assert not (tmp_path / "file.bin").exists()
-    assert not (tmp_path / "file.out").exists()
+    assert (workspace / "a.md2html-out").is_file()
+    assert not (tmp_path / "a.out").exists()
+    assert not (tmp_path / "a.bin").exists()
+
+
+def test_page_rebuild_prunes_removed_inline_workspace(tmp_path: Path):
+    build_one(
+        tmp_path,
+        "# Run\n\n@src-begin(python, execute)\nprint('one')\n@src-end\n\n"
+        "@src-begin(python, execute)\nprint('two')\n@src-end\n",
+        execute=True,
+    )
+    cache = page_cache(tmp_path)
+    original = workspaces(cache)
+    assert len(original) == 2
+
+    build_one(
+        tmp_path, "# Run\n\n@src-begin(python, execute)\nprint('one')\n@src-end\n", execute=True,
+    )
+    remaining = workspaces(cache)
+    assert len(remaining) == 1
+    assert remaining[0] == original[0]
+    assert not original[1].exists()
+
+
+def test_failed_execution_still_allows_website_shaped_cache_cleanup(tmp_path: Path):
+    source = tmp_path / "content"
+    output = tmp_path / "public"
+    for section in ("guide", "reference"):
+        directory = source / section
+        directory.mkdir(parents=True)
+        (directory / "index.md").write_text(
+            "# Failure\n\n@src-begin(fail, execute)\nnot valid\n@src-end\n", encoding="utf-8",
+        )
+    settings = Settings(
+        input=source, output=output, output_mode="site", project_root=tmp_path,
+        recursive=True, execute=True,
+        commands={"fail": "printf 'kept for inspection' > failed.txt; printf 'intentional failure' >&2; exit 1"},
+    )
+    result = Project(settings).build()
+    assert len(result.warnings) == 2
+    guide = page_cache(tmp_path, "guide/index.html")
+    reference = page_cache(tmp_path, "reference/index.html")
+    assert (workspaces(guide)[0] / "failed.txt").is_file()
+    assert (workspaces(reference)[0] / "failed.txt").is_file()
+
+    (source / "reference" / "index.md").unlink()
+    result = Project(settings).build()
+    assert any("intentional failure" in warning for warning in result.warnings)
+    assert guide.is_dir()
+    assert not reference.exists()
+
+
+def test_unterminated_source_block_preserves_page_cache(tmp_path: Path):
+    source = tmp_path / "article.md"
+    build_one(
+        tmp_path, "# Run\n\n@src-begin(python, execute)\nprint('valid')\n@src-end\n", execute=True,
+    )
+    cache = page_cache(tmp_path)
+    cached = workspaces(cache)
+    source.write_text("# Run\n\n@src-begin(python, execute)\nprint('unfinished')\n", encoding="utf-8")
+    settings = Settings.single(source).with_cli(execute=True)
+    with pytest.raises(ValueError, match="missing @src-end"):
+        Project(settings).build()
+    assert workspaces(cache) == cached
 
 
 def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
