@@ -341,8 +341,10 @@ file. Pass `--css styles.css` more than once to combine custom files, or
 uses `templates/report.css` when it exists and no explicit CSS was selected.
 
 The built-in page has a responsive reading measure, horizontal overflow for
-wide code and equations, light/dark behavior, accessible reader controls, and
-print-friendly semantic markup.
+wide code and equations, light/dark behavior, text-size and typeface controls,
+and print-friendly semantic markup. Without JavaScript the page uses its normal
+system-aware defaults and all content remains available. JavaScript reveals the
+reader controls and remembers their selections between pages.
 
 ## Print the examples and documentation
 

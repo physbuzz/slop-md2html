@@ -20,6 +20,7 @@ def main() -> int:
     args = parser.parse_args()
     page = args.root / "2026/05/18/gaussianintegral.html"
     css = args.root / "assets/md2html/mathjax-chtml.css"
+    site_css = (args.root / "css/main.css").read_text(encoding="utf-8")
     fonts = sorted((args.root / "assets/md2html/mathjax/woff2").glob("*.woff2"))
     page_raw, page_gzip = size(page)
     css_raw, css_gzip = size(css)
@@ -42,6 +43,11 @@ def main() -> int:
         "hash guard precedes styles": text.find("data-hash-pending") < text.find('rel="stylesheet"'),
         "CHTML styles precede site script": text.find("mathjax-chtml.css") < text.find("site.js"),
         "site script is deferred": '<script defer src="/js/site.js"></script>' in text,
+        "reader CSS avoids :has()": ":has(" not in site_css,
+        "text-size control present": text.count('name="reader-text"') == 3,
+        "controls are progressive enhancement": 'classList.add("js")' in text and "html.js .reader-widget" in site_css,
+        "reader widget hidden without JavaScript": bool(re.search(r"\.reader-widget\s*\{[^}]*display:\s*none", site_css, re.DOTALL)),
+        "content visible without JavaScript": not re.search(r"<html\b[^>]*(?:data-hash-pending|class=[\"'][^\"']*js)", text),
     }
     print(f"HTML       {page_raw:>7} raw  {page_gzip:>6} gzip")
     print(f"CHTML CSS  {css_raw:>7} raw  {css_gzip:>6} gzip  {glyph_rules} glyph rules")

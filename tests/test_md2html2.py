@@ -44,6 +44,9 @@ def test_single_file_writes_only_sibling_html(tmp_path: Path):
     assert "<h1 id=\"a-useful-title\">" in output
     assert "tex-mml-chtml.js" not in output
     assert "Measure" in output and "reader-width" in output and "reader-type" in output
+    assert "Text" in output and "reader-text" in output
+    assert ":has(" not in output
+    assert ".reader-controls{display:none}.js .reader-controls{display:block}" in output
 
 
 def test_frontmatter_title_and_yaml_types(tmp_path: Path):
@@ -113,6 +116,7 @@ def test_directives_resolve_from_including_file_and_make_toc(tmp_path: Path):
     assert '<a href="#included">Included</a>' in output
     assert "print" in output and "hello" in output
     assert '<details class="source">' in output
+    assert ".toc{margin:1.25rem 0;padding:.75rem .9rem" in output
 
 
 def test_highlighted_code_uses_one_box(tmp_path: Path):

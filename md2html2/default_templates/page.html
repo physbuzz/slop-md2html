@@ -6,7 +6,8 @@
   <title>{{ page.title }}</title>
   <script>
   (function () {
-    var defaults = {theme: 'system', width: 'normal', type: 'sans'};
+    document.documentElement.classList.add('js');
+    var defaults = {theme: 'system', width: 'normal', type: 'sans', text: 'normal'};
     Object.keys(defaults).forEach(function (name) {
       try {
         var value = localStorage.getItem('md2html-reader-' + name);
@@ -44,13 +45,19 @@
           <label><input name="reader-type" value="sans" type="radio" checked> sans</label>
           <label><input name="reader-type" value="serif" type="radio"> serif</label>
         </fieldset>
+        <fieldset>
+          <legend>Text</legend>
+          <label><input name="reader-text" value="small" type="radio"> small</label>
+          <label><input name="reader-text" value="normal" type="radio" checked> normal</label>
+          <label><input name="reader-text" value="large" type="radio"> large</label>
+        </fieldset>
       </details>
     </header>
     <article class="page-content">{{ content }}</article>
   </main>
   <script>
   (function () {
-    var defaults = {theme: 'system', width: 'normal', type: 'sans'};
+    var defaults = {theme: 'system', width: 'normal', type: 'sans', text: 'normal'};
     Object.keys(defaults).forEach(function (name) {
       var current = defaults[name];
       try { current = localStorage.getItem('md2html-reader-' + name) || current; } catch (_) {}
