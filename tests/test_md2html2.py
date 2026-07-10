@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import os
 from pathlib import Path
 import shutil
 import socket
@@ -11,10 +11,10 @@ from urllib.request import urlopen
 
 import pytest
 
-from md2html2.cli import WatchGraph, _server, main, parser, settings_from_args
+from md2html2.cli import WatchGraph, _server, main, parser, settings_from_args, settings_list_from_args
 from md2html2.project import Project
 from md2html2.render import parse_frontmatter
-from md2html2.settings import MathSettings, Settings, load_settings, normal_path
+from md2html2.settings import MathSettings, Settings, find_config, load_settings, normal_path
 
 
 def build_one(tmp_path: Path, text: str, **changes) -> str:
@@ -78,6 +78,9 @@ def test_math_is_shielded_and_only_adds_assets_when_used(tmp_path: Path):
 def test_build_time_math_backends(tmp_path: Path, backend: str, marker: str):
     output = build_one(tmp_path, "# Math\n\n$x+1$\n", math=MathSettings(backend))
     assert marker in output
+    assert '<span class="math-copy-source">$x+1$</span>' in output
+    assert 'class="math-rendered" aria-hidden="true"' in output
+    assert "data-md2html-math-copy" in output
     assert "tex-mml-chtml.js" not in output
 
 
@@ -88,6 +91,7 @@ def test_mathjax_chtml_is_static_and_standalone(tmp_path: Path):
     assert "mjx-c.mjx-c" in output
     assert "cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font" in output
     assert "data-tex=" in output and "data-latex=" not in output
+    assert '<span class="math-copy-source">$$x^2+1$$</span>' in output
     assert "tex-mml-chtml.js" not in output
     assert sorted(path.name for path in tmp_path.iterdir()) == ["article.html", "article.md"]
 
@@ -129,7 +133,7 @@ def test_directives_resolve_from_including_file_and_make_toc(tmp_path: Path):
     assert '<div class="table-of-contents">' in output
 
 
-def test_toc_compacts_exercises_like_the_original_page(tmp_path: Path):
+def test_toc_compacts_exercise_sections(tmp_path: Path):
     output = build_one(
         tmp_path,
         "# Book\n\n@toc\n\n## Exercises\n\n### Exercise 1.1\n\n#### Solution\n\n### Exercise 1.2\n",
@@ -142,7 +146,7 @@ def test_toc_compacts_exercises_like_the_original_page(tmp_path: Path):
     assert ".table-of-contents h2" not in output
 
 
-def test_adjacent_blockquotes_match_kramdown(tmp_path: Path):
+def test_adjacent_blockquotes_share_one_container(tmp_path: Path):
     output = build_one(tmp_path, "> First note.\n\n> Second note.\n")
     assert output.count("<blockquote>") == 1
     assert output.count("<p>") == 2
@@ -165,8 +169,11 @@ def test_inline_source_uses_the_code_box_contract(tmp_path: Path):
 
 
 def test_obsidian_images_and_embedded_video_are_responsive(tmp_path: Path):
-    output = build_one(tmp_path, "![[diagram one.png]]\n")
-    assert '<img class="obsidian-image" src="diagram one.png" alt="diagram one">' in output
+    (tmp_path / "diagram one.png").write_bytes(b"image")
+    output = build_one(tmp_path, "![[diagram one.png|width=70%|alt=A diagram|class=centered]]\n")
+    assert '<img class="obsidian-image centered" src="diagram one.png" alt="A diagram" style="width:70%">' in output
+    numeric = build_one(tmp_path, "![[diagram one.png|320]]\n")
+    assert 'alt="diagram one" style="width:320px"' in numeric
     assert ".obsidian-image{display:block;margin:1rem auto}" in output
     video = build_one(tmp_path, '<iframe src="https://www.youtube.com/embed/example"></iframe>\n')
     assert 'iframe[src*="youtube.com"]' in video
@@ -275,7 +282,7 @@ def test_committed_cache_is_portable_and_used_without_execution(tmp_path: Path, 
     Project(settings).build()
     first_workspace = workspaces(page_cache(Path(".")))[0].name
     cache_text = "".join(path.read_text(encoding="utf-8") for path in Path(".md2html-cache").rglob("*") if path.is_file())
-    assert str(first) not in cache_text and "execution.json" not in cache_text
+    assert str(first) not in cache_text
     shutil.copytree(first, second)
 
     monkeypatch.chdir(second)
@@ -295,7 +302,7 @@ def test_committed_cache_is_portable_and_used_without_execution(tmp_path: Path, 
 def test_only_source_content_invalidates_cached_output(tmp_path: Path):
     source = tmp_path / "article.md"
     source.write_text(
-        "@src-begin(python, execute)\nprint('old output')\n@src-end\n", encoding="utf-8",
+        "@src-begin(python, execute)\nprint('cached output')\n@src-end\n", encoding="utf-8",
     )
     Project(Settings.single(source).with_cli(execute=True)).build()
     source.write_text(
@@ -305,33 +312,6 @@ def test_only_source_content_invalidates_cached_output(tmp_path: Path):
     output = result.written[0].read_text(encoding="utf-8")
     assert '<div class="code-output">' not in output
     assert any("no cached output" in warning for warning in result.warnings)
-
-
-def test_strict_legacy_cache_is_migrated_without_execution(tmp_path: Path):
-    code = "print('legacy output')\n"
-    source = tmp_path / "article.md"
-    source.write_text(f"@src-begin(python, execute)\n{code}@src-end\n", encoding="utf-8")
-    legacy = page_cache(tmp_path) / "python-1-machine-specific-hash"
-    legacy.mkdir(parents=True)
-    (legacy / "output.txt").write_text("legacy output\n", encoding="utf-8")
-    (legacy / "execution.json").write_text(json.dumps({"code": code, "source": "/old/checkout/article.md"}))
-    result = Project(Settings.single(source)).build()
-    output = result.written[0].read_text(encoding="utf-8")
-    migrated = workspaces(page_cache(tmp_path))[0]
-    assert "legacy output" in output and not result.warnings
-    assert migrated != legacy and (migrated / ".complete").is_file()
-
-
-def test_cached_output_survives_page_output_move(tmp_path: Path):
-    source = tmp_path / "article.md"
-    source.write_text(
-        "@src-begin(python, execute)\nprint('moved page output')\n@src-end\n", encoding="utf-8",
-    )
-    Project(Settings.single(source, tmp_path / "old.html").with_cli(execute=True)).build()
-    result = Project(Settings.single(source, tmp_path / "new.html")).build()
-    assert "moved page output" in result.written[0].read_text(encoding="utf-8")
-    assert not result.warnings
-    assert workspaces(page_cache(tmp_path, "new.html"))[0].name == workspaces(page_cache(tmp_path, "old.html"))[0].name
 
 
 def test_file_execution_runs_in_a_stable_clean_workspace(tmp_path: Path):
@@ -487,10 +467,6 @@ def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
     (source / "_layouts").mkdir()
     (source / "_includes").mkdir()
     (source / "assets").mkdir()
-    (source / "_config.yml").write_text(
-        "title: Native site\nurl: https://example.test\npermalink: /:year/:month/:day/:title.html\n",
-        encoding="utf-8",
-    )
     (source / "_includes" / "head.html").write_text(
         '<title>{{ page.title }} | {{ site.title }}</title><script>document.documentElement.setAttribute("data-hash-pending", "")</script><script defer src="/site.js"></script>',
         encoding="utf-8",
@@ -513,9 +489,22 @@ def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
     return source, output
 
 
+def site_settings(source: Path, output: Path, **changes) -> Settings:
+    settings = Settings(
+        input=source, output=output, output_mode="site", project_root=source, recursive=True,
+        site_data={
+            "title": "Native site",
+            "url": "https://example.test",
+            "permalink": "/:year/:month/:day/:title.html",
+        },
+    )
+    from dataclasses import replace
+    return replace(settings, **changes)
+
+
 def test_native_site_model_layouts_includes_assets_and_dated_urls(tmp_path: Path):
     source, output = site_fixture(tmp_path)
-    settings = Settings(input=source, output=output, output_mode="site", project_root=source, recursive=True)
+    settings = site_settings(source, output)
     result = Project(settings).build()
     post = output / "2026/05/18/gaussianintegral.html"
     assert post in result.written
@@ -533,15 +522,13 @@ def test_native_site_model_layouts_includes_assets_and_dated_urls(tmp_path: Path
 
 def test_native_site_deduplicates_mathjax_styles(tmp_path: Path):
     source, output = site_fixture(tmp_path)
-    settings = Settings(
-        input=source, output=output, output_mode="site", project_root=source,
-        recursive=True, math=MathSettings("mathjax-chtml"),
-    )
+    settings = site_settings(source, output, math=MathSettings("mathjax-chtml"))
     Project(settings).build()
     post = (output / "2026/05/18/gaussianintegral.html").read_text()
     stylesheet = output / "assets/md2html/mathjax-chtml.css"
     css = stylesheet.read_text()
     assert stylesheet.is_file() and "@font-face" in css
+    assert ".math-copy-source" in css and ".math-rendered" in css
     assert "mjx-c.mjx-c" in css
     assert "cdn.jsdelivr.net" not in css
     assert 'url("mathjax/woff2/mjx-tex-n.woff2")' in css
@@ -557,10 +544,7 @@ def test_native_site_deduplicates_mathjax_styles(tmp_path: Path):
 @pytest.mark.parametrize("mode, marker", [("remote", "cdn.jsdelivr.net"), ("inline", "data:font/woff2;base64,"), ("none", None)])
 def test_native_site_chtml_font_modes(tmp_path: Path, mode: str, marker: str | None):
     source, output = site_fixture(tmp_path)
-    settings = Settings(
-        input=source, output=output, output_mode="site", project_root=source,
-        recursive=True, math=MathSettings("mathjax-chtml", mode),
-    )
+    settings = site_settings(source, output, math=MathSettings("mathjax-chtml", mode))
     Project(settings).build()
     css = (output / "assets/md2html/mathjax-chtml.css").read_text()
     post = (output / "2026/05/18/gaussianintegral.html").read_text()
@@ -574,10 +558,7 @@ def test_native_site_chtml_font_modes(tmp_path: Path, mode: str, marker: str | N
 
 def test_native_site_all_font_mode_copies_without_preloading_every_font(tmp_path: Path):
     source, output = site_fixture(tmp_path)
-    settings = Settings(
-        input=source, output=output, output_mode="site", project_root=source,
-        recursive=True, math=MathSettings("mathjax-chtml", "all"),
-    )
+    settings = site_settings(source, output, math=MathSettings("mathjax-chtml", "all"))
     Project(settings).build()
     fonts = list((output / "assets/md2html/mathjax/woff2").glob("*.woff2"))
     post = (output / "2026/05/18/gaussianintegral.html").read_text()
@@ -588,13 +569,33 @@ def test_native_site_all_font_mode_copies_without_preloading_every_font(tmp_path
 def test_config_paths_are_relative_to_config(tmp_path: Path):
     root = tmp_path / "project"
     root.mkdir()
+    (root / "content").mkdir()
     config = root / "md2html.json"
-    config.write_text('{"input":"content","output":"public","output_mode":"site","math":{"backend":"mathml","chtml_fonts":"inline"}}')
+    config.write_text('{"input":"content","output":"public","output_mode":"pages","math":{"backend":"mathml","chtml_fonts":"inline"}}')
     settings = load_settings(config)
     assert settings.input == root / "content"
     assert settings.output == root / "public"
     assert settings.math.backend == "mathml"
     assert settings.math.chtml_fonts == "inline"
+    assert settings.shared_assets
+
+
+def test_only_md2html_json_is_discovered_and_configuration_is_json(tmp_path: Path):
+    (tmp_path / "md2html.config").write_text("input: content\n")
+    (tmp_path / "md2html.yml").write_text("input: content\n")
+    assert find_config(tmp_path) is None
+    with pytest.raises(ValueError, match="must be a JSON file"):
+        load_settings(tmp_path / "md2html.yml")
+    config = tmp_path / "md2html.json"
+    config.write_text('{"input":"content","timeout":3.5,"feature_css":false,"highlight_style":"friendly"}')
+    assert find_config(tmp_path) == config
+    settings = load_settings(config)
+    assert settings.timeout == 3.5
+    assert not settings.feature_css
+    assert settings.highlight_style == "friendly"
+    config.write_text("input: content\n")
+    with pytest.raises(ValueError, match="could not read configuration"):
+        load_settings(config)
 
 
 def test_relative_config_keeps_relative_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -608,6 +609,9 @@ def test_relative_config_keeps_relative_paths(tmp_path: Path, monkeypatch: pytes
 
 
 def test_template_directory_and_companion_css_take_priority(tmp_path: Path):
+    bundled = tmp_path / "_templates"
+    bundled.mkdir()
+    (bundled / "page.html").write_text("wrong project template")
     templates = tmp_path / "templates"
     templates.mkdir()
     (templates / "page.html").write_text("<title>{{ page.title }}</title><style>{{ md2html.css }}</style>{{ content }}")
@@ -615,6 +619,113 @@ def test_template_directory_and_companion_css_take_priority(tmp_path: Path):
     output = build_one(tmp_path, "# Custom\n", templates=templates)
     assert "rebeccapurple" in output
     assert "reader-controls" not in output
+
+
+def test_project_root_fallback_and_project_template_directory(tmp_path: Path):
+    nested = tmp_path / "chapters"
+    templates = tmp_path / "_templates"
+    nested.mkdir()
+    templates.mkdir()
+    (tmp_path / "shared.md").write_text("Included from root.\n")
+    (tmp_path / "program.py").write_text("print('root source')\n")
+    (templates / "page.html").write_text("<main data-project-template>{{ content }}</main>")
+    source = nested / "one.md"
+    source.write_text("@include(shared.md)\n\n@src(program.py)\n")
+    settings = Settings.single(source).with_cli(project_root=tmp_path)
+    output = Project(settings).build().written[0].read_text()
+    assert "data-project-template" in output
+    assert "Included from root" in output and "root source" in output
+
+
+def test_standalone_template_fallback_does_not_search_site_layouts(tmp_path: Path):
+    layouts = tmp_path / "_layouts"
+    layouts.mkdir()
+    (layouts / "page.html").write_text("site layout should not become a page template")
+    output = build_one(tmp_path, "# Bundled template\n")
+    assert '<main class="container">' in output
+    assert "site layout should not become" not in output
+
+
+def test_page_frontmatter_selects_template_css_and_stylesheets(tmp_path: Path):
+    templates = tmp_path / "_templates"
+    templates.mkdir()
+    (templates / "card.html").write_text(
+        "{% for href in md2html.stylesheets %}<link rel=stylesheet href=\"{{ href }}\">{% endfor %}"
+        "<style>{{ md2html.css }}</style><main>{{ content }}</main>"
+    )
+    (tmp_path / "custom.css").write_text("body{color:rebeccapurple}")
+    (tmp_path / "print.css").write_text("@media print{}")
+    output = build_one(
+        tmp_path,
+        "---\ntemplate: card\ncss: custom.css\nstylesheets: [print.css]\n---\n```python\nprint(1)\n```\n",
+    )
+    assert "rebeccapurple" in output
+    assert ".code-box" in output and ".codehilite .k" in output
+    assert '<link rel=stylesheet href="print.css">' in output
+
+
+def test_directory_pages_can_choose_different_templates_and_css(tmp_path: Path):
+    source = tmp_path / "content"
+    templates = tmp_path / "_templates"
+    output = tmp_path / "public"
+    source.mkdir()
+    templates.mkdir()
+    (templates / "special.html").write_text("<style>{{ md2html.css }}</style><aside>{{ content }}</aside>")
+    (tmp_path / "special.css").write_text("aside{color:purple}")
+    (source / "one.md").write_text("---\ntemplate: special\ncss: special.css\n---\n# One\n")
+    (source / "two.md").write_text("# Two\n")
+    Project(Settings(input=source, output=output, project_root=tmp_path)).build()
+    assert "<aside>" in (output / "one.html").read_text() and "color:purple" in (output / "one.html").read_text()
+    assert '<main class="container">' in (output / "two.html").read_text()
+
+
+def test_custom_css_keeps_feature_css_and_highlight_styles_are_cli_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    Path("base.css").write_text("body{color:navy}")
+    Path("code.md").write_text("```python\nif True: print(1)\n```\n")
+    assert main(["code.md", "--css", "base.css", "--highlight-style", "monokai"]) == 0
+    output = Path("code.html").read_text()
+    assert "color:navy" in output and ".codehilite" in output
+    assert "#272822" in output
+    settings = settings_from_args(parser().parse_args(["code.md", "--highlight-dark-style", "friendly"]))
+    assert settings.highlight_dark_style == "friendly"
+    assert main(["code.md", "--css", "base.css", "--no-feature-css"]) == 0
+    output = Path("code.html").read_text()
+    assert "color:navy" in output and ".codehilite .k {" not in output
+    Path("code.md").write_text("---\ncss: []\n---\n```python\nif True: print(1)\n```\n")
+    assert main(["code.md", "--css", "base.css"]) == 0
+    output = Path("code.html").read_text()
+    assert "color:navy" not in output and ".codehilite .k {" in output
+    with pytest.raises(SystemExit):
+        parser().parse_args(["code.md", "--highlight-style", "not-a-pygments-style"])
+
+
+def test_execution_timeout_is_configurable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    (tmp_path / "example.demo").write_text("source\n")
+    seen: list[float] = []
+
+    def run(*args, **kwargs):
+        seen.append(kwargs["timeout"])
+        return subprocess.CompletedProcess(args[0], 0, "output\n", "")
+
+    monkeypatch.setattr("md2html2.render.subprocess.run", run)
+    build_one(tmp_path, "@src(example.demo)\n", execute=True, timeout=2.5, commands={"demo": "demo {source}"})
+    assert seen == [2.5]
+    assert settings_from_args(parser().parse_args([str(tmp_path / "article.md"), "--timeout", "7.5"])).timeout == 7.5
+
+
+def test_single_page_copies_referenced_assets_when_output_moves(tmp_path: Path):
+    source = tmp_path / "article.md"
+    image = tmp_path / "figure.png"
+    code = tmp_path / "example.py"
+    source.write_text("![[figure.png|320]]\n\n@src(example.py)\n")
+    image.write_bytes(b"image")
+    code.write_text("print('copied')\n")
+    output = tmp_path / "public" / "article.html"
+    result = Project(Settings.single(source, output)).build()
+    assert (output.parent / "figure.png").read_bytes() == b"image"
+    assert (output.parent / "example.py").read_text() == "print('copied')\n"
+    assert result.asset_dependencies[image] == output.parent / "figure.png"
 
 
 def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch):
@@ -626,10 +737,9 @@ def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFix
     assert settings.execute and settings.recursive and settings.force
     assert settings.input == source and settings.output == Path("one.html")
     assert main(["--example-config"]) == 0
-    assert (tmp_path / "md2html.config").is_file()
+    assert (tmp_path / "md2html.json").is_file()
     assert main(["--example-config"]) == 2
     assert main(["--example-config", "--force"]) == 0
-    assert main(["--example-json"]) == 0
     assert (tmp_path / "md2html.json").read_text().startswith("{")
     assert main(["--example-template", "-"]) == 0
     assert "<!doctype html>" in capsys.readouterr().out.lower()
@@ -648,10 +758,12 @@ def test_help_and_readme_explain_watch_serve_and_examples(capsys: pytest.Capture
     help_text = capsys.readouterr().out
     assert "rebuild when source files change" in help_text
     assert "md2html -erf notes -o html" in help_text
+    assert "--shared-assets" in help_text and "--highlight-style" in help_text and "--timeout" in help_text
     assert main(["--readme"]) == 0
     readme = capsys.readouterr().out
     assert "@src-begin" in readme
     assert "2026/05/18/gaussianintegral.html" in readme
+    assert '"shared_assets": true' in readme and "md2html.json" in readme
 
 
 def test_preview_server_serves_selected_root(tmp_path: Path):
@@ -670,6 +782,197 @@ def test_preview_server_serves_selected_root(tmp_path: Path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_multiple_files_build_beside_sources_or_under_output_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    Path("folder").mkdir()
+    for name in ("one.md", "two.md", "folder/three.md"):
+        Path(name).write_text(f"# {name}\n")
+    assert main(["one.md", "two.md", "folder/three.md"]) == 0
+    assert Path("one.html").is_file() and Path("two.html").is_file() and Path("folder/three.html").is_file()
+    settings = settings_list_from_args(parser().parse_args(["one.md", "two.md", "folder/three.md", "-o", "public"]))
+    assert [item.output for item in settings] == [Path("public/one.html"), Path("public/two.html"), Path("public/folder/three.html")]
+    assert main(["one.md", "two.md", "folder/three.md", "-o", "public"]) == 0
+    assert all(item.output.is_file() for item in settings)
+
+
+def test_multiple_directories_preserve_their_names_under_one_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    for directory in (Path("book"), Path("notes")):
+        directory.mkdir()
+        (directory / "index.md").write_text(f"# {directory.name}\n")
+    assert main(["-r", "book", "notes", "-o", "public"]) == 0
+    assert Path("public/book/index.html").is_file()
+    assert Path("public/notes/index.html").is_file()
+    for directory in ("book", "notes"):
+        css = Path(f"public/{directory}/assets/md2html/page.css")
+        page = Path(f"public/{directory}/index.html").read_text()
+        assert css.is_file() and ".code-box" in css.read_text()
+        assert 'href="assets/md2html/page.css"' in page
+
+
+def test_shared_assets_flag_collects_files_and_externalizes_common_css(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    Path("one.md").write_text("# One\n")
+    Path("two.md").write_text("# Two\n")
+    settings = settings_list_from_args(parser().parse_args(["one.md", "two.md", "--shared-assets"]))
+    assert [item.output for item in settings] == [Path("html/one.html"), Path("html/two.html")]
+    assert all(item.shared_assets for item in settings)
+    assert main(["one.md", "two.md", "--shared-assets"]) == 0
+    assert Path("html/assets/md2html/page.css").is_file()
+    assert 'href="assets/md2html/page.css"' in Path("html/one.html").read_text()
+
+
+def test_shared_directory_uses_external_static_math_css_and_fonts(tmp_path: Path):
+    source = tmp_path / "content"
+    output = tmp_path / "public"
+    source.mkdir()
+    (source / "index.md").write_text("# Math\n\n$x^2$\n")
+    settings = Settings(
+        input=source, output=output, project_root=source, shared_assets=True,
+        math=MathSettings("mathjax-chtml", "auto"),
+    )
+    Project(settings).build()
+    page = (output / "index.html").read_text()
+    assert 'href="assets/md2html/page.css"' in page
+    assert 'href="assets/md2html/mathjax-chtml.css"' in page
+    assert "@font-face" not in page
+    assert (output / "assets/md2html/mathjax-chtml.css").is_file()
+    assert list((output / "assets/md2html/mathjax/woff2").glob("*.woff2"))
+    stylesheet = output / "assets/md2html/mathjax-chtml.css"
+    before = stylesheet.read_text()
+    skipped = Project(settings).build(skip_unchanged=True)
+    assert skipped.skipped == [output / "index.html"]
+    assert stylesheet.read_text() == before
+
+
+def test_multiple_input_server_exposes_only_planned_files(tmp_path: Path):
+    public = tmp_path / "public"
+    public.mkdir()
+    page = public / "one.html"
+    secret = public / "secret.txt"
+    page.write_text("page")
+    secret.write_text("secret")
+    routes = {"one.html": page}
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    server, _ = _server(public, port, routes)
+    try:
+        assert urlopen(f"http://127.0.0.1:{port}/one.html").read() == b"page"
+        with pytest.raises(OSError):
+            urlopen(f"http://127.0.0.1:{port}/secret.txt")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_multiple_file_serve_builds_watches_and_links_every_page_without_exposing_the_source_directory(tmp_path: Path):
+    (tmp_path / "folder").mkdir()
+    for name in ("one.md", "two.md", "folder/three.md"):
+        (tmp_path / name).write_text(f"# {name}\n")
+    (tmp_path / "private.txt").write_text("not served")
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    process = subprocess.Popen(
+        [sys.executable, "-u", "-m", "md2html2", "one.md", "two.md", "folder/three.md", "--serve", "--port", str(port)],
+        cwd=tmp_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        one = two = three = b""
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                one = urlopen(f"http://127.0.0.1:{port}/one.html", timeout=.2).read()
+                two = urlopen(f"http://127.0.0.1:{port}/two.html", timeout=.2).read()
+                three = urlopen(f"http://127.0.0.1:{port}/folder/three.html", timeout=.2).read()
+                if b"one.md" in one and b"two.md" in two and b"three.md" in three:
+                    break
+            except OSError:
+                time.sleep(.05)
+        assert b"one.md" in one and b"two.md" in two and b"three.md" in three
+        with pytest.raises(OSError):
+            urlopen(f"http://127.0.0.1:{port}/private.txt")
+        (tmp_path / "folder/three.md").write_text("# Watched third page\n")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            three = urlopen(f"http://127.0.0.1:{port}/folder/three.html", timeout=.2).read()
+            if b"Watched third page" in three:
+                break
+            time.sleep(.05)
+        assert b"Watched third page" in three
+    finally:
+        process.terminate()
+        log, _ = process.communicate(timeout=3)
+    assert "preview: http://127.0.0.1:%d/one.html" % port in log
+    assert "preview: http://127.0.0.1:%d/two.html" % port in log
+    assert "preview: http://127.0.0.1:%d/folder/three.html" % port in log
+
+
+def test_initial_watch_build_skips_newer_page(tmp_path: Path):
+    source = tmp_path / "article.md"
+    source.write_text("# Original\n")
+    settings = Settings.single(source)
+    Project(settings).build()
+    output = source.with_suffix(".html")
+    stamp = source.stat().st_mtime_ns + 1_000_000_000
+    os.utime(output, ns=(stamp, stamp))
+    source_text = output.read_text()
+    result = Project(settings).build(skip_unchanged=True)
+    assert result.written == [] and result.skipped == [output]
+    assert output.read_text() == source_text
+    assert result.page_dependencies == {source: {source}}
+    forced = Project(settings.with_cli(force=True)).build(skip_unchanged=True)
+    assert forced.written == [output] and not forced.skipped
+
+
+def test_directory_assets_have_copy_links_and_update_under_watch(tmp_path: Path):
+    source = tmp_path / "source"
+    output = source / "html"
+    (source / "assets").mkdir(parents=True)
+    (source / "index.md").write_text("# Page\n")
+    asset = source / "assets/data.txt"
+    asset.write_text("before")
+    (source / ".private.txt").write_text("hidden")
+    (source / "_private.txt").write_text("hidden")
+    (source / "md2html.json").write_text("{}")
+    result = Project(Settings(input=source, output=output, project_root=source, recursive=True)).build()
+    assert result.asset_dependencies[asset] == output / "assets/data.txt"
+    assert (output / "assets/data.txt").read_text() == "before"
+    assert not (output / ".private.txt").exists() and not (output / "_private.txt").exists()
+    assert not (output / "md2html.json").exists()
+    assert Project(Settings(input=source, output=output, project_root=source, recursive=True)).build().copied == []
+    page_mtime = (output / "index.html").stat().st_mtime_ns
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "md2html2", "-r", str(source), "-o", str(output), "--watch"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        asset.write_text("after")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and (output / "assets/data.txt").read_text() != "after":
+            time.sleep(.05)
+        assert (output / "assets/data.txt").read_text() == "after"
+        assert (output / "index.html").stat().st_mtime_ns == page_mtime
+        assert not (output / "html").exists()
+        assert process.poll() is None
+    finally:
+        process.terminate()
+        process.wait(timeout=3)
+
+
+def test_pyinstaller_build_and_install_workflow_is_declared():
+    makefile = (Path(__file__).parents[1] / "makefile").read_text()
+    project = (Path(__file__).parents[1] / "pyproject.toml").read_text()
+    assert "install: pyinstaller" in makefile
+    assert "--onefile" in makefile and "--copy-metadata md2html2" in makefile
+    assert 'node_modules:node_modules' in makefile and "$(NPM) install" in makefile
+    assert 'build = ["pyinstaller>=6"]' in project
 
 
 def test_serve_rebuilds_a_standalone_page(tmp_path: Path):
@@ -698,6 +1001,9 @@ def test_serve_rebuilds_a_standalone_page(tmp_path: Path):
         while time.monotonic() < deadline and not page_contains("Before include"):
             time.sleep(.05)
         assert page_contains("Before include")
+        initial_mtime = source.with_suffix(".html").stat().st_mtime_ns
+        time.sleep(.4)
+        assert source.with_suffix(".html").stat().st_mtime_ns == initial_mtime
         included.write_text("After include\n")
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and not page_contains("After include"):

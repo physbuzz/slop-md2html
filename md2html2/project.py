@@ -8,24 +8,36 @@ from datetime import date, datetime, timezone
 import base64
 import html
 from importlib.resources import files
+import os
 from pathlib import Path
 import re
 import shutil
 from typing import Any
 
-import yaml
 from liquid.exceptions import LiquidError
+from pygments.formatters import HtmlFormatter
+from pygments.util import ClassNotFound
 
 from .render import ContentRenderer, Executor, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
 from .settings import Settings, normal_path
 
 
 SOURCE_SUFFIXES = {".md", ".markdown"}
-PROJECT_FILES = {"md2html.config", "md2html.json", "md2html.yml", "md2html.yaml", "_config.yml", "_config.yaml"}
+PROJECT_FILES = {"md2html.json"}
 CHTML_CDN = "https://cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font@4.1.3/chtml/woff2"
 FONT_FACE = re.compile(r"@font-face\s*/\*\s*(MJX(?:-TEX)?-[A-Z0-9]+)\s*\*/\s*\{.*?\}\s*", re.DOTALL)
 CSS_IMPORT = re.compile(r"@import\s+(?:url\()?['\"]?([^'\")\s;]+)", re.IGNORECASE)
 STYLESHEET = re.compile(r"<link\b(?=[^>]*\brel=['\"][^'\"]*stylesheet)(?=[^>]*\bhref=['\"]([^'\"]+))[^>]*>", re.IGNORECASE)
+
+
+def syntax_css(light_style: str = "default", dark_style: str = "github-dark") -> str:
+    try:
+        light = HtmlFormatter(style=light_style).get_style_defs(".codehilite")
+        dark = HtmlFormatter(style=dark_style).get_style_defs('html[data-theme="dark"] .codehilite')
+        automatic = HtmlFormatter(style=dark_style).get_style_defs('html:not([data-theme="light"]) .codehilite')
+    except ClassNotFound as error:
+        raise ValueError(str(error)) from error
+    return light + "\n" + dark + "\n@media (prefers-color-scheme:dark){\n" + automatic + "\n}\n"
 
 
 @dataclass
@@ -37,7 +49,6 @@ class Page:
     markdown: bool
     url: str
     output_relative: Path
-    rendered: Rendered | None = None
 
     def data(self) -> dict[str, Any]:
         data = dict(self.metadata)
@@ -63,8 +74,9 @@ class BuildResult:
     written: list[Path] = field(default_factory=list)
     copied: list[Path] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    dependencies: set[Path] = field(default_factory=set)
     page_dependencies: dict[Path, set[Path]] = field(default_factory=dict)
+    asset_dependencies: dict[Path, Path] = field(default_factory=dict)
+    skipped: list[Path] = field(default_factory=list)
 
     @property
     def output_count(self) -> int:
@@ -81,9 +93,10 @@ class Project:
         self.bundled_assets = Path(str(files("md2html2").joinpath("assets")))
         self.site = self._site_data()
         template_dirs = [
+            settings.templates,
+            settings.project_root / "_templates",
             self.source_root / "_includes",
             self.source_root / "_layouts",
-            *( [settings.templates] if settings.templates else []),
             self.bundled_templates,
         ]
         self.liquid = make_liquid((path for path in template_dirs if path is not None), self.site)
@@ -91,23 +104,35 @@ class Project:
         assert isinstance(self.loader, TrackingLoader)
         self.renderer = ContentRenderer(settings, self.liquid)
         self.math_fonts: set[str] = set()
-        self.has_chtml = False
+        self.shared_dependencies: set[Path] = set()
 
-    def build(self, only: set[Path] | None = None) -> BuildResult:
+    def build(self, only: set[Path] | None = None, *, skip_unchanged: bool = False) -> BuildResult:
         self._validate_paths()
         result = BuildResult()
         pages = self._discover_pages()
         self._populate_site(pages)
         wanted = None if only is None else {path.absolute() for path in only}
         selected = pages if wanted is None else [page for page in pages if page.source.absolute() in wanted]
+        if skip_unchanged and self.settings.shared_math_assets and any(
+            self.settings.force or not self._target(page).is_file()
+            or self._target(page).stat().st_mtime_ns < page.source.stat().st_mtime_ns
+            for page in selected
+        ):
+            skip_unchanged = False
         if only is None and self.settings.clean and self.settings.output_mode == "site" and self.settings.output.exists():
             shutil.rmtree(self.settings.output)
+        if self.settings.shared_assets and self.settings.output_mode == "pages":
+            self._write_shared_css(result)
         for page in selected:
+            target = self._target(page)
+            if skip_unchanged and not self.settings.force and target.is_file() and target.stat().st_mtime_ns >= page.source.stat().st_mtime_ns:
+                result.skipped.append(target)
+                result.page_dependencies[page.source] = {page.source, *self.shared_dependencies}
+                continue
             rendered = self._render_page(page)
-            page.rendered = rendered
-            if self.settings.output_mode == "site" and rendered.features.math_css:
-                self.has_chtml = True
-                stylesheet, fonts = self._write_math_assets(rendered.features, result)
+            shared_math = self.settings.output_mode == "site" or (self.settings.shared_assets and self.settings.input.is_dir())
+            if shared_math and rendered.features.math_css:
+                stylesheet, fonts = self._write_math_assets(rendered.features, result, target)
                 tags = [
                     *(f'  <link rel="preload" href="{font}" as="font" type="font/woff2" crossorigin>' for font in fonts),
                     f'  <link rel="stylesheet" href="{stylesheet}">',
@@ -124,16 +149,16 @@ class Project:
                     rendered.html = rendered.html[:head_end] + assets + rendered.html[head_end:]
                 else:
                     rendered.html = assets + rendered.html
-            target = self._target(page)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(rendered.html, encoding="utf-8")
+            if self.settings.input.is_file():
+                self._copy_page_assets(target, rendered, result)
             if rendered.executor:
                 rendered.executor.finish()
             result.written.append(target)
             result.warnings.extend(rendered.warnings)
-            result.dependencies.update(rendered.dependencies)
             result.page_dependencies[page.source] = rendered.dependencies
-        if only is None and self.settings.output_mode == "site":
+        if only is None and not result.skipped and (self.settings.output_mode == "site" or self.settings.shared_assets):
             self._prune_math_assets()
         if only is None and self.settings.input.is_dir():
             self._copy_static(pages, result)
@@ -156,17 +181,6 @@ class Project:
 
     def _site_data(self) -> dict[str, Any]:
         data = dict(self.settings.site_data)
-        for name in ("_config.yml", "_config.yaml"):
-            path = self.source_root / name
-            if path.is_file():
-                try:
-                    loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-                except (OSError, yaml.YAMLError) as error:
-                    raise ValueError(f"could not read site data {path}: {error}") from error
-                if isinstance(loaded, dict):
-                    loaded.update(data)
-                    data = loaded
-                break
         data.setdefault("title", self.source_root.name)
         data.setdefault("description", "")
         data.setdefault("url", "")
@@ -296,13 +310,18 @@ class Project:
         if self.settings.output_mode == "site":
             content = self._apply_layouts(rendered.html, page_data, page.source, rendered)
         else:
-            content = self._page_template(rendered, page_data)
+            content = self._page_template(rendered, page_data, self._target(page))
         rendered.html = content.rstrip() + "\n"
         rendered.dependencies.update(self.loader.dependencies)
+        rendered.dependencies.update(self.shared_dependencies)
         for href in STYLESHEET.findall(rendered.html):
             name = href.split("?", 1)[0].split("#", 1)[0]
             if name and "://" not in name and not name.startswith("//"):
-                self._track_css((self.source_root if name.startswith("/") else page.source.parent) / name.lstrip("/"), rendered.dependencies)
+                path = (self.source_root if name.startswith("/") else page.source.parent) / name.lstrip("/")
+                if not path.exists():
+                    path = self.settings.project_root / name.lstrip("/")
+                self._track_css(path, rendered.dependencies)
+                rendered.assets[normal_path(path)] = Path(name.lstrip("/"))
         return rendered
 
     def _prune_execution_pages(self, pages: list[Page], warnings: list[str]) -> None:
@@ -322,13 +341,6 @@ class Project:
                     directory.rmdir()
             with suppress(OSError):
                 root.rmdir()
-        legacy = self.settings.project_root / ".md2html-cache" / "build"
-        if legacy.exists():
-            try:
-                shutil.rmtree(legacy)
-            except OSError as error:
-                warnings.append(f"could not remove legacy execution cache {legacy}: {error}")
-
     def _apply_layouts(self, content: str, page: dict[str, Any], source: Path, rendered: Rendered) -> str:
         layout_name = page.get("layout")
         seen: set[str] = set()
@@ -339,7 +351,7 @@ class Project:
                 content += f'<aside class="warning">Layout cycle omitted: {html.escape(name)}</aside>'
                 break
             seen.add(name)
-            path = self._find_layout(name)
+            path = self._find_template(name, site_layout=True)
             if not path:
                 rendered.warnings.append(f"layout not found for {source}: {name}")
                 break
@@ -354,27 +366,37 @@ class Project:
             layout_name = metadata.get("layout")
         return content
 
-    def _find_layout(self, name: str) -> Path | None:
+    def _find_template(self, name: str, *, site_layout: bool = False) -> Path | None:
         filename = name if Path(name).suffix else name + ".html"
         candidates = [
-            self.source_root / "_layouts" / filename,
-            *(([self.settings.templates / filename]) if self.settings.templates else []),
+            self.settings.templates / filename if self.settings.templates else None,
+            self.settings.project_root / "_templates" / filename,
+            self.source_root / "_layouts" / filename if site_layout else None,
             self.bundled_templates / filename,
         ]
-        return next((path for path in candidates if path.is_file()), None)
+        return next((path for path in candidates if path and path.is_file()), None)
 
-    def _page_template(self, rendered: Rendered, page: dict[str, Any]) -> str:
-        path = self._find_layout(self.settings.template)
+    def _page_template(self, rendered: Rendered, page: dict[str, Any], target: Path) -> str:
+        name = str(page.get("template") or self.settings.template)
+        path = self._find_template(name)
         if path is None:
-            raise ValueError(f"template not found: {self.settings.template}")
+            raise ValueError(f"template not found: {name}")
         rendered.dependencies.add(path)
-        css = self._css(rendered, path)
+        css = self._css(rendered, path, page)
         backend = self.settings.math.backend.lower()
+        stylesheets = [*self.settings.stylesheets, *self._values(page.get("stylesheets"))]
+        if self.settings.shared_assets and "css" not in page and "template" not in page:
+            stylesheet = self._output_root() / "assets/md2html/page.css"
+            stylesheets.append(Path(os.path.relpath(stylesheet, target.parent)).as_posix())
         context = {
             "site": self.site,
             "page": page,
             "content": rendered.html,
-            "md2html": {"css": css, "use_mathjax": rendered.features.math and backend == "mathjax"},
+            "md2html": {
+                "css": css or None,
+                "stylesheets": stylesheets,
+                "use_mathjax": rendered.features.math and backend == "mathjax",
+            },
         }
         try:
             return self.liquid.from_string(liquid_source(path.read_text(encoding="utf-8"))).render(**context)
@@ -382,32 +404,40 @@ class Project:
             rendered.warnings.append(f"template failed: {error}")
             return rendered.html + f'<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
 
-    def _css(self, rendered: Rendered, template: Path) -> str:
+    @staticmethod
+    def _values(value: Any) -> list[str]:
+        if value is None:
+            return []
+        return [value] if isinstance(value, str) else [str(item) for item in value]
+
+    def _css(self, rendered: Rendered, template: Path, page: dict[str, Any], *, shared: bool | None = None) -> str:
         features = rendered.features
         paths: list[Path] = []
-        if self.settings.css is None:
+        shared = self.settings.shared_assets if shared is None else shared
+        shared = shared and "css" not in page and "template" not in page
+        configured = page.get("css") if "css" in page else self.settings.css
+        if shared:
+            configured = ()
+        if configured is None:
             companion = template.with_suffix(".css")
             if companion.is_file():
                 paths.append(companion)
             elif template.name == "page.html":
                 paths.append(self.bundled_assets / "page-base.css")
-                if features.code or features.output:
-                    paths.append(self.bundled_assets / "feature-syntax.css")
-                    paths.append(self.bundled_assets / "feature-code.css")
-                if features.math:
-                    paths.append(self.bundled_assets / "feature-math.css")
-                if features.toc:
-                    paths.append(self.bundled_assets / "feature-toc.css")
-                if features.images:
-                    paths.append(self.bundled_assets / "feature-image.css")
-                if features.warning:
-                    paths.append(self.bundled_assets / "feature-warning.css")
             elif template.name == "barebones.html":
                 paths.append(self.bundled_assets / "barebones.css")
         else:
-            for name in self.settings.css:
+            for name in self._values(configured):
                 path = Path(name).expanduser()
                 paths.append(path if path.is_absolute() else self.settings.project_root / path)
+        feature_css = bool(page.get("feature_css", self.settings.feature_css)) and not shared
+        if feature_css:
+            for used, name in (
+                (features.code or features.output, "code"), (features.math, "math"),
+                (features.toc, "toc"), (features.images, "image"), (features.warning, "warning"),
+            ):
+                if used:
+                    paths.append(self.bundled_assets / f"feature-{name}.css")
         values = []
         for path in paths:
             try:
@@ -416,9 +446,27 @@ class Project:
                 self._track_css(path, rendered.dependencies, value)
             except OSError as error:
                 raise ValueError(f"could not read CSS {path}: {error}") from error
-        if features.math_css:
+        if feature_css and (features.code or features.output):
+            values.insert(1 if values else 0, syntax_css(self.settings.highlight_style, self.settings.highlight_dark_style))
+        if features.math_css and not (shared and self.settings.input.is_dir()):
             values.append(self._standalone_math_css(features))
         return "\n".join(values)
+
+    def _write_shared_css(self, result: BuildResult) -> None:
+        template = self._find_template(self.settings.template)
+        if template is None:
+            raise ValueError(f"template not found: {self.settings.template}")
+        features = Features(code=True, output=True, math=True, toc=True, images=True, warning=True)
+        rendered = Rendered("", "", features)
+        css = self._css(rendered, template, {}, shared=False).rstrip() + "\n"
+        relative = Path("assets/md2html/page.css")
+        root = self.settings.output if self.settings.input.is_dir() else self.settings.output.parent
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.is_file() or target.read_text(encoding="utf-8") != css:
+            target.write_text(css, encoding="utf-8")
+            result.written.append(target)
+        self.shared_dependencies = rendered.dependencies
 
     def _track_css(self, path: Path, dependencies: set[Path], value: str | None = None) -> None:
         path = normal_path(path)
@@ -456,13 +504,23 @@ class Project:
             return css
         return css.replace("mathjax/woff2", CHTML_CDN)
 
-    def _write_math_assets(self, features: Features, result: BuildResult) -> tuple[str, list[str]]:
+    def _write_math_assets(self, features: Features, result: BuildResult, page_target: Path) -> tuple[str, list[str]]:
         mode = self.settings.math.chtml_fonts
+        root = self._output_root()
+        base = str(self.site.get("baseurl", "")).rstrip("/")
+
+        def url(path: Path) -> str:
+            if self.settings.output_mode == "site":
+                return base + "/" + path.relative_to(root).as_posix()
+            return Path(os.path.relpath(path, page_target.parent)).as_posix()
+
         self.math_fonts.update(features.math_fonts)
         fonts = set(self.math_fonts)
         if mode == "all" and features.math_font_dir:
             fonts = {path.stem.removeprefix("mjx-tex-") for path in features.math_font_dir.glob("mjx-tex-*.woff2")}
         css = self._selected_math_css(features, fonts)
+        if self.settings.output_mode == "site":
+            css = (self.bundled_assets / "feature-math.css").read_text(encoding="utf-8") + "\n" + css
         if mode == "none":
             css = FONT_FACE.sub("", css)
         elif mode == "remote":
@@ -475,7 +533,7 @@ class Project:
         elif features.math_font_dir:
             for name in fonts:
                 source = features.math_font_dir / f"mjx-tex-{name}.woff2"
-                target = self.settings.output / "assets/md2html/mathjax/woff2" / source.name
+                target = root / "assets/md2html/mathjax/woff2" / source.name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if not target.exists() or target.read_bytes() != source.read_bytes():
                     shutil.copy2(source, target)
@@ -483,22 +541,21 @@ class Project:
                     result.copied.append(target)
 
         relative = Path("assets/md2html/mathjax-chtml.css")
-        target = self.settings.output / relative
+        target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(css.rstrip() + "\n", encoding="utf-8")
         if target not in result.written:
             result.written.append(target)
-        base = str(self.site.get("baseurl", "")).rstrip("/")
-        stylesheet = base + "/" + relative.as_posix()
+        stylesheet = url(target)
         preload_names = features.math_fonts if mode in {"auto", "all"} else set()
-        preload = [base + f"/assets/md2html/mathjax/woff2/mjx-tex-{name}.woff2" for name in sorted(preload_names)]
+        preload = [url(root / f"assets/md2html/mathjax/woff2/mjx-tex-{name}.woff2") for name in sorted(preload_names)]
         return stylesheet, preload
 
     def _prune_math_assets(self) -> None:
-        stylesheet = self.settings.output / "assets/md2html/mathjax-chtml.css"
-        font_root = self.settings.output / "assets/md2html/mathjax/woff2"
+        stylesheet = self._output_root() / "assets/md2html/mathjax-chtml.css"
+        font_root = self._output_root() / "assets/md2html/mathjax/woff2"
         mode = self.settings.math.chtml_fonts
-        if not self.has_chtml:
+        if not self.math_fonts:
             stylesheet.unlink(missing_ok=True)
             if font_root.parent.exists():
                 shutil.rmtree(font_root.parent)
@@ -518,6 +575,24 @@ class Project:
             return self.settings.output
         return self.settings.output / page.output_relative
 
+    def _output_root(self) -> Path:
+        return self.settings.output if self.settings.input.is_dir() else self.settings.output.parent
+
+    @staticmethod
+    def _copy_asset(source: Path, target: Path, result: BuildResult) -> None:
+        result.asset_dependencies[source] = target
+        if not source.is_file() or source.absolute() == target.absolute():
+            return
+        if target.is_file() and target.stat().st_mtime_ns >= source.stat().st_mtime_ns:
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        result.copied.append(target)
+
+    def _copy_page_assets(self, page_target: Path, rendered: Rendered, result: BuildResult) -> None:
+        for source, relative in rendered.assets.items():
+            self._copy_asset(source, normal_path(page_target.parent / relative), result)
+
     def _copy_static(self, pages: list[Page], result: BuildResult) -> None:
         page_sources = {page.source for page in pages}
         for source in sorted(self.source_root.rglob("*")):
@@ -531,9 +606,7 @@ class Project:
             target = self.settings.output / relative
             if source.absolute() == target.absolute():
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-            result.copied.append(target)
+            self._copy_asset(source, target, result)
 
     def _write_feed(self, pages: list[Page], result: BuildResult) -> None:
         target = self.settings.output / "feed.xml"

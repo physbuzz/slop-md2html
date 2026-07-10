@@ -1,12 +1,33 @@
-.PHONY: install test clean
+PYTHON ?= python3
+NPM ?= npm
+APP_NAME ?= md2html
+LOCAL_BIN ?= $(HOME)/.local/bin
 
-install:
-	python3 -m venv .venv
-	.venv/bin/pip install -e '.[dev]'
-	npm install
+.PHONY: install pyinstaller test clean
+
+install: pyinstaller
+	mkdir -p "$(LOCAL_BIN)"
+	install -m 755 "dist/$(APP_NAME)" "$(LOCAL_BIN)/$(APP_NAME)"
+	@echo "Installed $(APP_NAME) to $(LOCAL_BIN)/$(APP_NAME)"
+
+pyinstaller:
+	$(PYTHON) -m pip install -e '.[build]'
+	$(NPM) install
+	$(PYTHON) -m PyInstaller \
+		--name "$(APP_NAME)" \
+		--onefile \
+		--clean \
+		--collect-all md2html2 \
+		--collect-all pygments \
+		--collect-all mistune \
+		--collect-all liquid \
+		--collect-all watchdog \
+		--copy-metadata md2html2 \
+		--add-data "node_modules:node_modules" \
+		md2html2/__main__.py
 
 test:
 	.venv/bin/python -m pytest -q
 
 clean:
-	rm -rf build dist *.egg-info .pytest_cache .md2html-cache
+	rm -rf build dist *.spec *.egg-info .pytest_cache .md2html-cache

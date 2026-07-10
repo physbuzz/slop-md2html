@@ -5,6 +5,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+*.spec
 
 # Test, coverage, lint, and type-checker output
 .pytest_cache/

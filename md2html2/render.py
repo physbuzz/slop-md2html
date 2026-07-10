@@ -37,6 +37,8 @@ RAW_CODE = re.compile(r"<(pre|code)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 RAW_HIGHLIGHT = re.compile(r"<div\b[^>]*class=[\"'][^\"']*(?:codehilite|highlight)[^\"']*[\"'][^>]*>.*?</div>", re.IGNORECASE | re.DOTALL)
 RAW_COMMENT = re.compile(r"<!--[\s\S]*?-->")
 OBSIDIAN_IMAGE = re.compile(r"!\[\[([^\]\n]+)\]\]")
+MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
+HTML_IMAGE = re.compile(r"<(?:img|source|video)\b[^>]*\b(?:src|poster)=[\"']([^\"']+)[\"']", re.IGNORECASE)
 HIGHLIGHT = re.compile(r"{%\s*highlight\s+([\w+.-]+)\s*%}(.*?){%\s*endhighlight\s*%}", re.DOTALL)
 SRC_BLOCK = re.compile(r"^@src-begin\(([^)]*)\)[ \t]*\r?\n(.*?)^@src-end[ \t]*$", re.MULTILINE | re.DOTALL)
 SRC_BEGIN_LINE = re.compile(r"^[ \t]*@src-begin\([^)]*\)[ \t]*$")
@@ -48,6 +50,22 @@ HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
 EXERCISE = re.compile(r"^exercise\b", re.IGNORECASE)
 ADJACENT_BLOCKQUOTES = re.compile(r"</blockquote>\s*<blockquote>")
 ALIGN = re.compile(r"\\begin\{(align\*?|gather\*?|multline\*?|equation\*?)\}.*?\\end\{\1\}", re.DOTALL)
+MATH_COPY_SCRIPT = """<script data-md2html-math-copy>
+(function () {
+  document.addEventListener("copy", function (event) {
+    var selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    var fragment = selection.getRangeAt(0).cloneContents();
+    if (!fragment.querySelector || !fragment.querySelector(".math-copy-source")) return;
+    fragment.querySelectorAll(".math-rendered").forEach(function (node) { node.remove(); });
+    var box = document.createElement("div");
+    box.appendChild(fragment);
+    event.clipboardData.setData("text/plain", box.textContent);
+    event.clipboardData.setData("text/html", box.innerHTML);
+    event.preventDefault();
+  });
+})();
+</script>"""
 
 LANGUAGE_ALIASES = {"wl": "mathematica", "mma": "mathematica", "rkt": "racket", "py": "python", "js": "javascript"}
 LANGUAGE_SUFFIXES = {"python": ".py", "py": ".py", "javascript": ".js", "js": ".js", "racket": ".rkt", "cpp": ".cpp", "c++": ".cpp", "c": ".c", "bash": ".sh", "shell": ".sh", "sh": ".sh", "wl": ".wl", "mathematica": ".wl"}
@@ -142,6 +160,7 @@ class Features:
     code: bool = False
     output: bool = False
     math: bool = False
+    math_copy: bool = False
     toc: bool = False
     images: bool = False
     warning: bool = False
@@ -156,6 +175,7 @@ class Rendered:
     title: str
     features: Features
     dependencies: set[Path] = field(default_factory=set)
+    assets: dict[Path, Path] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     executor: Executor | None = field(default=None, repr=False)
 
@@ -227,19 +247,6 @@ class Executor:
         slug = self._slug(language or "source") if inline else self._slug(source.stem)
         name = self._slug(language or source.suffix.lstrip(".") or "source")
         builddir = self.cache / f"{name}-{hashlib.sha256(code.encode()).hexdigest()[:12]}"
-        root = self.pages_root(self.settings)
-        if not builddir.exists() and root.exists():
-            for output in root.rglob("output.txt"):
-                old = output.parent
-                try:
-                    current = old.name == builddir.name and (old / ".complete").is_file()
-                    legacy = current or json.loads((old / "execution.json").read_text(encoding="utf-8")).get("code") == code
-                    if legacy:
-                        builddir.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copytree(old, builddir)
-                        break
-                except (OSError, json.JSONDecodeError):
-                    pass
         self.active.add(builddir)
         return builddir, slug
 
@@ -250,8 +257,7 @@ class Executor:
         builddir, slug = self._workspace(source, code, language, inline)
         output_path = builddir / "output.txt"
         complete = builddir / ".complete"
-        legacy = builddir / "execution.json"
-        if use_cache and output_path.is_file() and (complete.is_file() or legacy.is_file()) and (not self.settings.force or not enabled):
+        if use_cache and output_path.is_file() and complete.is_file() and (not self.settings.force or not enabled):
             complete.touch()
             return output_path.read_text(encoding="utf-8")
         if not enabled:
@@ -283,7 +289,7 @@ class Executor:
                 self.warn(f"invalid execution command for {source}: {error}")
                 return None
             result = subprocess.run(
-                ["sh", "-c", formatted], cwd=builddir, text=True, capture_output=True, timeout=120,
+                ["sh", "-c", formatted], cwd=builddir, text=True, capture_output=True, timeout=self.settings.timeout,
             )
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}"
@@ -347,6 +353,7 @@ class ContentRenderer:
         stash = Stash()
         features = Features()
         dependencies: set[Path] = {source}
+        assets: dict[Path, Path] = {}
         warnings: list[str] = []
         executor = Executor(self.settings, cache_page, warnings.append)
 
@@ -378,7 +385,7 @@ class ContentRenderer:
             return self._source_box(source, code, language, flags, True, executor, stash, features)
 
         body = SRC_BLOCK.sub(inline_block, body)
-        body = self._expand_directives(body, source, source, context, stash, features, dependencies, warnings, executor, ())
+        body = self._expand_directives(body, source, source, context, stash, features, dependencies, assets, warnings, executor, ())
 
         def protect_fence(match: re.Match[str]) -> str:
             features.code = True
@@ -389,12 +396,28 @@ class ContentRenderer:
         body = INLINE_CODE.sub(lambda m: stash.put(f"<code>{html.escape(m.group(2).strip())}</code>", block=False), body)
 
         def obsidian_image(match: re.Match[str]) -> str:
-            name = match.group(1).strip()
-            alt = Path(name).stem.replace("-", " ").replace("_", " ")
-            markup = f'<img class="obsidian-image" src="{html.escape(name, quote=True)}" alt="{html.escape(alt, quote=True)}">'
+            name, attributes = self._image_parts(match.group(1))
+            path = self._resolve_reference(name, source)
+            href = Path(name)
+            dependencies.add(path)
+            assets[path] = href
+            alt = attributes.get("alt") or Path(name).stem.replace("-", " ").replace("_", " ")
+            classes = "obsidian-image" + (" " + attributes["class"] if attributes.get("class") else "")
+            width = attributes.get("width")
+            if width and width.isdigit():
+                width += "px"
+            width_attr = f' style="width:{html.escape(width, quote=True)}"' if width else ""
+            markup = f'<img class="{html.escape(classes, quote=True)}" src="{html.escape(href.as_posix(), quote=True)}" alt="{html.escape(alt, quote=True)}"{width_attr}>'
             return stash.put(markup, block=True)
 
         body = OBSIDIAN_IMAGE.sub(obsidian_image, body)
+        for pattern in (MARKDOWN_IMAGE, HTML_IMAGE):
+            for match in pattern.finditer(body):
+                name = match.group(1).strip("'\"")
+                if "://" not in name and not name.startswith(("#", "data:", "mailto:")):
+                    path = self._resolve_reference(name, source)
+                    dependencies.add(path)
+                    assets[path] = Path(name)
         body = self._protect_math(body, stash, features, warnings)
 
         if TOC.search(body):
@@ -416,10 +439,33 @@ class ContentRenderer:
             output = body
         output = ADJACENT_BLOCKQUOTES.sub("", output)
         output = stash.restore(output)
+        if features.math_copy:
+            output += MATH_COPY_SCRIPT
         features.images = bool(re.search(r"<img\b", output, re.IGNORECASE))
         features.warning = 'class="warning"' in output
         title = str(context.get("page", {}).get("title") or source.name)
-        return Rendered(output, title, features, dependencies, warnings, executor)
+        return Rendered(output, title, features, dependencies, assets, warnings, executor)
+
+    def _resolve_reference(self, name: str, origin: Path) -> Path:
+        path = normal_path(Path(name).expanduser())
+        if path.is_absolute():
+            return path
+        local = normal_path(origin.parent / path)
+        return local if local.exists() else normal_path(self.settings.project_root / path)
+
+    @staticmethod
+    def _image_parts(value: str) -> tuple[str, dict[str, str]]:
+        parts = [part.strip() for part in value.split("|")]
+        attributes: dict[str, str] = {}
+        for part in parts[1:]:
+            if "=" in part:
+                key, item = part.split("=", 1)
+                attributes[key.strip().lower()] = item.strip().strip("'\"")
+            elif re.fullmatch(r"\d+(?:\.\d+)?(?:%|px|em|rem)?", part):
+                attributes["width"] = part
+            elif part:
+                attributes.setdefault("alt", part)
+        return parts[0], attributes
 
     @staticmethod
     def _validate_source_blocks(source: Path, body: str) -> None:
@@ -438,14 +484,14 @@ class ContentRenderer:
 
     def _expand_directives(
         self, body: str, origin: Path, page_source: Path, context: dict[str, Any], stash: Stash, features: Features,
-        dependencies: set[Path], warnings: list[str], executor: Executor, stack: tuple[Path, ...],
+        dependencies: set[Path], assets: dict[Path, Path], warnings: list[str], executor: Executor, stack: tuple[Path, ...],
     ) -> str:
         origin = normal_path(origin)
 
         def replace(match: re.Match[str]) -> str:
             kind, raw = match.group(1), match.group(2)
             name, flags = split_args(raw)
-            path = normal_path(origin.parent / name)
+            path = self._resolve_reference(name, origin)
             dependencies.add(path)
             if path in stack or path == origin and kind == "include":
                 chain = " -> ".join(str(item) for item in (*stack, path))
@@ -460,10 +506,11 @@ class ContentRenderer:
                 _, value = parse_frontmatter(value)
                 self._validate_source_blocks(path, value)
                 return self._expand_directives(
-                    value, path, page_source, context, stash, features, dependencies, warnings, executor, (*stack, origin),
+                    value, path, page_source, context, stash, features, dependencies, assets, warnings, executor, (*stack, origin),
                 )
             language = path.suffix.lstrip(".") or "text"
-            href = Path(os.path.relpath(path, page_source.parent)).as_posix()
+            href = (Path(name) if origin == page_source else Path(os.path.relpath(path, page_source.parent))).as_posix()
+            assets[path] = Path(href)
             return self._source_box(path, value, language, flags, False, executor, stash, features, name, href)
 
         previous = None
@@ -507,6 +554,16 @@ class ContentRenderer:
     def _protect_math(self, body: str, stash: Stash, features: Features, warnings: list[str]) -> str:
         backend = self.settings.math.backend.lower()
 
+        def rendered_math(markup: str) -> str:
+            def attributes(match: re.Match[str]) -> str:
+                tag = match.group(0)
+                if re.search(r'\bclass="', tag):
+                    tag = re.sub(r'\bclass="', 'class="math-rendered ', tag, count=1)
+                else:
+                    tag = tag[:-1] + ' class="math-rendered">'
+                return tag[:-1] + ' aria-hidden="true">'
+            return re.sub(r"^<[^>]+>", attributes, markup, count=1)
+
         def emit(tex: str, display: bool) -> str:
             features.math = True
             try:
@@ -535,6 +592,11 @@ class ContentRenderer:
                 markup = delimiter + tex + delimiter
             class_name = "math display-math" if display else "math inline-math"
             tag = "div" if display else "span"
+            if backend in {"mathml", "svg", "mathjax-chtml"} and not markup.startswith(("$", "\\")):
+                features.math_copy = True
+                delimiter = "$$" if display else "$"
+                source = html.escape(delimiter + tex + delimiter)
+                markup = f'<span class="math-copy-source">{source}</span>{rendered_math(markup)}'
             return stash.put(f'<{tag} class="{class_name}" data-tex="{html.escape(tex, quote=True)}">{markup}</{tag}>', block=display)
 
         result: list[str] = []

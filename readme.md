@@ -24,7 +24,16 @@ npm install
 ```
 
 The installed command is named `md2html`. Its Python package is named
-`md2html2`, so it can be developed beside the original implementation.
+`md2html2`.
+
+To build a portable single-file command and install it under
+`~/.local/bin/md2html`:
+
+```console
+make pyinstaller
+# Or build and install in one step:
+make install
+```
 
 ## Everyday commands
 
@@ -33,6 +42,14 @@ Build one self-contained page:
 ```console
 md2html notes.md
 md2html notes.md -o public/notes.html
+```
+
+Build several independent pages beside their sources, or collect them below
+one output directory:
+
+```console
+md2html introduction.md chapter1.md appendix/notes.md
+md2html introduction.md chapter1.md appendix/notes.md -o public
 ```
 
 Run source examples while building:
@@ -56,12 +73,27 @@ that depend on a changed file. `@src` files are direct dependencies;
 recursively. Rebuilding a page replaces its old watch rules, so removed
 includes stop triggering it.
 
+The initial watch build skips a page when its existing HTML is newer than its
+Markdown source. Static files in directory builds have direct input-to-output
+copy links, so changing `assets/image.png` updates the output copy without
+rebuilding unrelated pages. Generated HTML, copied output assets,
+`.md2html-cache`, and the output tree itself are excluded from observation.
+When several scattered pages are served together, the preview server exposes
+only their generated pages and copied assets and prints one link per page.
+
 Render every Markdown file below a directory while preserving its relative
 path:
 
 ```console
 md2html -r notes -o html
 ```
+
+Directory builds place common page CSS in `assets/md2html/page.css`; individual
+file builds remain self-contained. Use `--shared-assets` to collect a list of
+files under `html/` with the same external CSS behavior. Set
+`"shared_assets": false` in a directory project's configuration when every
+page should embed its own CSS instead. Build-time CommonHTML in a shared
+directory also uses one adaptive stylesheet and local font directory.
 
 The compact development command below executes examples, scans recursively,
 and ignores cached execution results:
@@ -73,12 +105,12 @@ md2html -erf ~/sicp/src -o ~/sicp/html
 Build a configured native site:
 
 ```console
-md2html --config md2html.config
-md2html --config md2html.config --serve --port 4000
+md2html --config md2html.json
+md2html --config md2html.json --serve --port 4000
 ```
 
-When the current directory contains `md2html.config`, `md2html.yml`,
-`md2html.yaml`, or `md2html.json`, the shorter forms work too:
+When the current directory or a parent contains `md2html.json`, the shorter
+forms work too:
 
 ```console
 md2html
@@ -117,10 +149,19 @@ Partition[Range[8], 2] /. {{a_, b_} :> a + b}
 Invalid TeX is left visible and reported as a warning; it does not prevent the
 rest of the page from building.
 
+Obsidian image embeds accept width, alternative text, and CSS classes. A plain
+number is interpreted as pixels:
+
+```markdown
+![[figures/orbit.png|width=70%|alt=Orbital diagram|class=centered]]
+![[figures/detail.png|480]]
+```
+
 ## Directives
 
 Directives occupy their own line. Relative paths are resolved from the file
-that contains the directive, including nested includes.
+that contains the directive, including nested includes, and then from the
+project root when no local file exists.
 
 ### Table of contents
 
@@ -196,7 +237,7 @@ normally without `--execute`.
 ```console
 # Run from the website repository, where the cache is not ignored.
 git add .md2html-cache
-md2html --config md2html.config
+md2html --config md2html.json
 ```
 
 Changing the source text selects a new cache entry. Changing checkout paths,
@@ -212,10 +253,14 @@ available in command strings. `{filename}` is an alias for `{source}`. For
 `{sourcedir}` is also relative, `{builddir}` is `.`, `{executable}` is a
 `slug.md2html-out` path, and `{output}` is `output.txt`:
 
-```yaml
-commands:
-  julia: julia {source}
-  cpp: g++ {source} -o {executable} && {executable} > {output}
+```json
+{
+  "timeout": 30,
+  "commands": {
+    "julia": "julia {source}",
+    "cpp": "g++ {source} -o {executable} && {executable} > {output}"
+  }
+}
 ```
 
 If a command creates `{output}`, its contents appear below the source.
@@ -227,6 +272,8 @@ Failed executable examples remain available for inspection and do not prevent
 this cleanup; a page parse or rendering failure preserves its previous cache.
 
 Only use executable content from sources you trust.
+The execution timeout defaults to 120 seconds and can be changed with
+`--timeout SECONDS` or the JSON `timeout` setting.
 
 ## Mathematics
 
@@ -248,6 +295,10 @@ math. `mathjax-chtml` renders static CommonHTML during the build and needs the
 Node.js dependency installed above; a site shares one generated stylesheet,
 while a standalone page embeds it. `mathml` and `svg` also render during the
 build. `raw` preserves delimiters while still shielding them from Markdown.
+Build-time CommonHTML, MathML, and SVG keep a hidden copy of the original
+delimited LaTeX beside the visual rendering. Selecting prose that contains
+static math therefore copies `$...$` or `$$...$$` instead of presentation
+glyphs.
 
 Static CommonHTML supports five font modes through `--math-fonts` or
 `math.chtml_fonts`:
@@ -277,8 +328,9 @@ _posts/2026-05-18-gaussianintegral.md
 ```
 
 This is the default post permalink and prevents existing Jekyll-style links
-from changing. Set `permalink` in `_config.yml` or page front matter to choose a
-different path. A permalink ending in `/` writes `index.html` below that path.
+from changing. Set `site.permalink` in `md2html.json` or `permalink` in page
+front matter to choose a different path. A permalink ending in `/` writes
+`index.html` below that path.
 
 Native sites support:
 
@@ -289,43 +341,53 @@ Native sites support:
   `site.tag_list`;
 - useful Liquid filters including `relative_url` and `absolute_url`;
 - static file copying and a small Atom `feed.xml`;
-- `_config.yml` site metadata and exclusion lists.
+- site metadata and exclusion lists from `md2html.json`.
 
-These familiar names are intentional, but the native site pipeline is not a
-promise of complete Jekyll compatibility. Dedicated compatibility stages can
-be added later without changing page discovery or content rendering.
+These familiar names are intentional, but the native site pipeline does not
+attempt to reproduce every Jekyll behavior.
 
 ## Configuration
 
-JSON and YAML are supported. Paths are resolved relative to the configuration
-file, which makes a config runnable from any working directory.
+Configuration uses one file name and one format: `md2html.json`. Paths are
+resolved relative to that file, which makes a project runnable from any working
+directory.
 
-```yaml
-input: .
-output: _site
-output_mode: site
-templates: templates
-template: page.html
-math:
-  backend: mathjax-chtml
-  chtml_fonts: auto
-execute: false
-exclude:
-  - drafts
-site:
-  title: My technical notes
-  url: https://example.com
+```json
+{
+  "input": ".",
+  "output": "_site",
+  "output_mode": "site",
+  "templates": "templates",
+  "template": "page.html",
+  "css": ["styles/base.css"],
+  "feature_css": true,
+  "shared_assets": true,
+  "highlight_style": "default",
+  "highlight_dark_style": "github-dark",
+  "timeout": 120,
+  "math": {
+    "backend": "mathjax-chtml",
+    "chtml_fonts": "auto"
+  },
+  "execute": false,
+  "exclude": ["drafts"],
+  "site": {
+    "title": "My technical notes",
+    "url": "https://example.com"
+  }
+}
 ```
 
 Top-level values not reserved for build settings also become `site` variables.
-This allows an existing `_config.yml` and a small `md2html.config` to work
-together cleanly.
+Use the explicit `site` object when keeping build and template settings visually
+separate is helpful.
 
 ## Templates and CSS
 
-Templates are looked up in the configured `templates` directory first and in
-the installed defaults second. Native-site layouts and includes are looked up
-in `_layouts` and `_includes` before those directories.
+Templates are looked up in the configured `templates` directory first, then in
+the project's `_templates` directory, and finally in the installed defaults.
+Native-site `_layouts` remain available after `_templates`; Liquid includes
+also search `_includes`.
 
 The standalone template receives:
 
@@ -333,12 +395,35 @@ The standalone template receives:
 - `page`: front matter plus `title`, `name`, `url`, and `path`;
 - `site`: configured site values, often mostly empty for one file;
 - `md2html.css`: the CSS selected for the page;
+- `md2html.stylesheets`: external stylesheet URLs selected for the page;
 - `md2html.use_mathjax`: whether the page needs browser math rendering.
 
 With the default template, CSS is embedded so a single build remains a single
-file. Pass `--css styles.css` more than once to combine custom files, or
-`--no-css` for no embedded CSS. A custom `templates/report.html` automatically
-uses `templates/report.css` when it exists and no explicit CSS was selected.
+file. Pass `--css styles.css` more than once to replace and combine base CSS
+files. Generated feature CSS for code, math, TOCs, images, and warnings is
+still added; use `--no-feature-css` or `"feature_css": false` to omit it.
+`--no-css` omits both groups. A custom `templates/report.html` automatically
+uses `templates/report.css` when it exists and no explicit base CSS was
+selected. `--stylesheet URL` adds an external stylesheet link.
+
+Page front matter can override the project template and CSS without creating a
+separate build:
+
+```markdown
+---
+template: report
+css:
+  - styles/report.css
+stylesheets:
+  - styles/print.css
+feature_css: true
+---
+```
+
+The template is found using the same configured-directory, `_templates`, and
+bundled lookup order. An empty `css: []` removes base CSS while retaining
+feature CSS. A page with its own `template` or `css` embeds its selected styles
+even when the rest of a directory uses shared assets.
 
 The built-in page has a responsive reading measure, horizontal overflow for
 wide code and equations, light/dark behavior, text-size and typeface controls,
@@ -349,17 +434,17 @@ their selections between pages.
 Highlighted fences use a `codehilite` wrapper. Source directives use a
 `code-box` containing `code-header`, `codehilite`, and, when execution produced
 text, `code-output`. Explicitly collapsible source uses `collapsible-code`
-inside that same outer box. The default page includes the complete standard
-light token palette and its dark counterpart. These class names are stable
-hooks for custom CSS.
+inside that same outer box. The default page includes a light Pygments palette
+and a dark counterpart. Choose them by Pygments style name with
+`--highlight-style NAME` and `--highlight-dark-style NAME`, or the corresponding
+JSON settings. These class names are stable hooks for custom CSS.
 
 ## Print the examples and documentation
 
 The installed command can emit every useful starting point:
 
 ```console
-md2html --example-config md2html.config
-md2html --example-json md2html.json
+md2html --example-config md2html.json
 md2html --example-template templates/page.html
 md2html --example-css templates/page.css
 md2html --readme
@@ -382,7 +467,8 @@ print(result.written)
 ```
 
 `Settings` is immutable. `Project.build()` returns written files, copied files,
-warnings, discovered dependencies, and dependencies grouped by source page.
+skipped pages, warnings, dependencies grouped by source page, and direct
+source-to-output asset copy links.
 Markdown and Liquid include cycles produce warnings and visible error markup
 while the remaining website continues building.
 
@@ -394,6 +480,5 @@ final templating—not in how Markdown, directives, math, or code behave. Site
 models are complete before Liquid renders any page, so lists and taxonomies do
 not depend on build order.
 
-The current release does not provide Jekyll-Markdown output or claim complete
-Jekyll compatibility. Those are future adapters around the native page model,
-not alternate foundations hidden inside the renderer.
+The package emits standalone HTML pages and native static sites. It does not
+emit Jekyll Markdown or reproduce Jekyll as a separate rendering mode.
