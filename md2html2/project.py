@@ -42,6 +42,7 @@ class Page:
     def data(self) -> dict[str, Any]:
         data = dict(self.metadata)
         data.setdefault("title", self.source.name)
+        data["name"] = self.source.name
         data["url"] = self.url
         data.setdefault("path", self.relative.as_posix())
         data.setdefault("tags", [])

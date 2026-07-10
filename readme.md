@@ -330,7 +330,7 @@ in `_layouts` and `_includes` before those directories.
 The standalone template receives:
 
 - `content`: rendered article HTML;
-- `page`: front matter plus `title`, `url`, and `path`;
+- `page`: front matter plus `title`, `name`, `url`, and `path`;
 - `site`: configured site values, often mostly empty for one file;
 - `md2html.css`: the CSS selected for the page;
 - `md2html.use_mathjax`: whether the page needs browser math rendering.
@@ -345,6 +345,11 @@ wide code and equations, light/dark behavior, text-size and typeface controls,
 and print-friendly semantic markup. The native controls and their eight
 ID-specific CSS selectors work without JavaScript; JavaScript only remembers
 their selections between pages.
+
+Highlighted fences use a `codehilite` wrapper. Source directives use a
+`code-box` containing `code-header`, `codehilite`, and, when execution produced
+text, `code-output`. Explicitly collapsible source uses `collapsible-code`
+inside that same outer box. These class names are stable hooks for custom CSS.
 
 ## Print the examples and documentation
 

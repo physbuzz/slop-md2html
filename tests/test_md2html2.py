@@ -56,6 +56,7 @@ def test_frontmatter_title_and_yaml_types(tmp_path: Path):
     assert body == "Body\n"
     output = build_one(tmp_path, "---\ntitle: Named\n---\n# Different\n")
     assert "<title>Named</title>" in output
+    assert '<div class="page-title">article.md</div>' in output
 
 
 def test_math_is_shielded_and_only_adds_assets_when_used(tmp_path: Path):
@@ -116,7 +117,11 @@ def test_directives_resolve_from_including_file_and_make_toc(tmp_path: Path):
     output = build_one(tmp_path, "# Notes\n\n@toc\n\n@include(parts/more.md)\n")
     assert '<a href="#included">Included</a>' in output
     assert "print" in output and "hello" in output
-    assert '<details class="source">' in output
+    assert '<div class="code-box">' in output
+    assert '<details class="collapsible-code">' in output
+    assert '<summary class="code-summary"><a href="parts/example.py">example.py</a>' in output
+    assert '<div class="codehilite"><pre>' in output
+    assert 'class="source"' not in output and 'class="highlight"' not in output
     assert '<div class="table-of-contents">' in output
 
 
@@ -140,8 +145,16 @@ def test_adjacent_blockquotes_match_kramdown(tmp_path: Path):
 
 def test_highlighted_code_uses_one_box(tmp_path: Path):
     output = build_one(tmp_path, "# Code\n\n```python\nprint('hello')\n```\n")
-    assert '<pre class="highlight">' in output
-    assert '<div class="highlight">' not in output
+    assert '<div class="codehilite"><pre>' in output
+    assert '<div class="code-box">' not in output
+
+
+def test_inline_source_uses_the_code_box_contract(tmp_path: Path):
+    output = build_one(tmp_path, "@src-begin(python)\nprint('hello')\n@src-end\n")
+    assert '<div class="code-box inline-source">' in output
+    assert '<div class="code-header">python source</div>' in output
+    assert '<div class="codehilite"><pre>' in output
+    assert '<details class="source"' not in output
 
 
 def test_obsidian_images_and_embedded_video_are_responsive(tmp_path: Path):
@@ -283,7 +296,7 @@ def test_only_source_content_invalidates_cached_output(tmp_path: Path):
     )
     result = Project(Settings.single(source)).build()
     output = result.written[0].read_text(encoding="utf-8")
-    assert '<pre class="code-output">' not in output
+    assert '<div class="code-output">' not in output
     assert any("no cached output" in warning for warning in result.warnings)
 
 
@@ -366,7 +379,7 @@ def test_force_refreshes_cached_output_when_execution_is_enabled(tmp_path: Path)
     output = build_one(
         tmp_path, page, execute=True, force=True, commands={"demo": "printf new > {output}"},
     )
-    assert '<pre class="code-output"><code>new</code></pre>' in output
+    assert '<div class="code-output">\n<span>Output:</span>\n<pre>new</pre>' in output
 
 
 @pytest.mark.skipif(shutil.which("c++") is None, reason="c++ is required")
@@ -617,7 +630,8 @@ def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFix
     example_css = (tmp_path / "templates/page.css").read_text()
     assert ".reader-widget form" in example_css
     assert ".table-of-contents" in example_css
-    assert ".source>pre.highlight" in example_css
+    assert ".code-box .codehilite" in example_css
+    assert ".code-output pre" in example_css
 
 
 def test_help_and_readme_explain_watch_serve_and_examples(capsys: pytest.CaptureFixture[str]):

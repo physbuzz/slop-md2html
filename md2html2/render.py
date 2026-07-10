@@ -193,8 +193,7 @@ def _lexer(language: str, filename: Path | None = None):
 
 
 def code_html(code: str, language: str = "text", filename: Path | None = None) -> str:
-    body = highlight(code.rstrip("\n") + "\n", _lexer(language, filename), HtmlFormatter(nowrap=True))
-    return f'<pre class="highlight">{body}</pre>\n'
+    return highlight(code.rstrip("\n") + "\n", _lexer(language, filename), HtmlFormatter(cssclass="codehilite"))
 
 
 def split_args(value: str) -> tuple[str, set[str]]:
@@ -379,7 +378,7 @@ class ContentRenderer:
             return self._source_box(source, code, language, flags, True, executor, stash, features)
 
         body = SRC_BLOCK.sub(inline_block, body)
-        body = self._expand_directives(body, source, context, stash, features, dependencies, warnings, executor, ())
+        body = self._expand_directives(body, source, source, context, stash, features, dependencies, warnings, executor, ())
 
         def protect_fence(match: re.Match[str]) -> str:
             features.code = True
@@ -438,7 +437,7 @@ class ContentRenderer:
             raise ValueError(f"missing @src-end for {source}:{begin}")
 
     def _expand_directives(
-        self, body: str, origin: Path, context: dict[str, Any], stash: Stash, features: Features,
+        self, body: str, origin: Path, page_source: Path, context: dict[str, Any], stash: Stash, features: Features,
         dependencies: set[Path], warnings: list[str], executor: Executor, stack: tuple[Path, ...],
     ) -> str:
         origin = normal_path(origin)
@@ -461,10 +460,11 @@ class ContentRenderer:
                 _, value = parse_frontmatter(value)
                 self._validate_source_blocks(path, value)
                 return self._expand_directives(
-                    value, path, context, stash, features, dependencies, warnings, executor, (*stack, origin),
+                    value, path, page_source, context, stash, features, dependencies, warnings, executor, (*stack, origin),
                 )
             language = path.suffix.lstrip(".") or "text"
-            return self._source_box(path, value, language, flags, False, executor, stash, features)
+            href = Path(os.path.relpath(path, page_source.parent)).as_posix()
+            return self._source_box(path, value, language, flags, False, executor, stash, features, name, href)
 
         previous = None
         while previous != body:
@@ -474,23 +474,32 @@ class ContentRenderer:
 
     def _source_box(
         self, source: Path, code: str, language: str, flags: set[str], inline: bool,
-        executor: Executor, stash: Stash, features: Features,
+        executor: Executor, stash: Stash, features: Features, label: str | None = None, href: str | None = None,
     ) -> str:
         features.code = True
         code_markup = code_html(code, language, source)
         collapsible = bool(flags & {"collapsed", "collapsible", "expanded"})
+        label = html.escape(label or ("Source" if collapsible else f"{language} source"))
+        link = f'<a href="{html.escape(href, quote=True)}">{label}</a>' if href else label
         if collapsible:
-            open_attr = " open" if "expanded" in flags else ""
-            label = html.escape(source.name if not inline else f"{language} source")
-            code_markup = f'<details class="source"{open_attr}><summary>{label}</summary>{code_markup}</details>'
+            open_attr = "" if "collapsed" in flags else " open"
+            code_markup = (
+                f'<details class="collapsible-code"{open_attr}>\n'
+                f'<summary class="code-summary">{link} <span class="expand-hint">(click to expand)</span></summary>\n'
+                f"{code_markup}</details>\n"
+            )
+        else:
+            header = f'<div class="code-header">{link}</div>\n' if link else ""
+            code_markup = header + code_markup
         should_run = self.settings.execute and "noexecute" not in flags
         output = executor.run(source, code, language, inline, enabled=should_run, use_cache="noexecute" not in flags)
         if output is None and "execute" in flags and not self.settings.execute:
             executor.warn(f"no cached output for {source}; rerun with --execute")
         if output is not None:
             features.output = True
-            code_markup += f'<pre class="code-output"><code>{html.escape(output)}</code></pre>'
-        return stash.put(code_markup, block=True)
+            code_markup += f'<div class="code-output">\n<span>Output:</span>\n<pre>{html.escape(output)}</pre>\n</div>\n'
+        classes = "code-box inline-source" if inline else "code-box"
+        return stash.put(f'<div class="{classes}">\n{code_markup}</div>\n', block=True)
 
     def _protect_math(self, body: str, stash: Stash, features: Features, warnings: list[str]) -> str:
         backend = self.settings.math.backend.lower()
