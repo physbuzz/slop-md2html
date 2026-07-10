@@ -36,6 +36,7 @@ INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)([^\n]*?(?:\n[^\n]*?)?)(?<!`)\1(?!`)")
 RAW_CODE = re.compile(r"<(pre|code)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 RAW_HIGHLIGHT = re.compile(r"<div\b[^>]*class=[\"'][^\"']*(?:codehilite|highlight)[^\"']*[\"'][^>]*>.*?</div>", re.IGNORECASE | re.DOTALL)
 RAW_COMMENT = re.compile(r"<!--[\s\S]*?-->")
+OBSIDIAN_IMAGE = re.compile(r"!\[\[([^\]\n]+)\]\]")
 HIGHLIGHT = re.compile(r"{%\s*highlight\s+([\w+.-]+)\s*%}(.*?){%\s*endhighlight\s*%}", re.DOTALL)
 SRC_BLOCK = re.compile(r"^@src-begin\(([^)]*)\)[ \t]*\r?\n(.*?)^@src-end[ \t]*$", re.MULTILINE | re.DOTALL)
 SRC_BEGIN_LINE = re.compile(r"^[ \t]*@src-begin\([^)]*\)[ \t]*$")
@@ -372,6 +373,14 @@ class ContentRenderer:
 
         body = FENCE.sub(protect_fence, body)
         body = INLINE_CODE.sub(lambda m: stash.put(f"<code>{html.escape(m.group(2).strip())}</code>", block=False), body)
+
+        def obsidian_image(match: re.Match[str]) -> str:
+            name = match.group(1).strip()
+            alt = Path(name).stem.replace("-", " ").replace("_", " ")
+            markup = f'<img class="obsidian-image" src="{html.escape(name, quote=True)}" alt="{html.escape(alt, quote=True)}">'
+            return stash.put(markup, block=True)
+
+        body = OBSIDIAN_IMAGE.sub(obsidian_image, body)
         body = self._protect_math(body, stash, features, warnings)
 
         if TOC.search(body):

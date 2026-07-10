@@ -90,7 +90,9 @@ Run `md2html --help` for the complete option list.
 ## Writing pages
 
 Standard Markdown headings, links, images, block quotes, tables, task lists,
-fenced code, raw HTML, and Jekyll-style YAML front matter are supported.
+fenced code, raw HTML, Obsidian `![[image.png]]` embeds, and Jekyll-style YAML
+front matter are supported. Images and embedded videos are responsive in the
+bundled page template.
 
 ```markdown
 ---

@@ -121,6 +121,14 @@ def test_highlighted_code_uses_one_box(tmp_path: Path):
     assert '<div class="highlight">' not in output
 
 
+def test_obsidian_images_and_embedded_video_are_responsive(tmp_path: Path):
+    output = build_one(tmp_path, "![[diagram one.png]]\n")
+    assert '<img class="obsidian-image" src="diagram one.png" alt="diagram one">' in output
+    assert ".obsidian-image{display:block;margin:1rem auto}" in output
+    video = build_one(tmp_path, '<iframe src="https://www.youtube.com/embed/example"></iframe>\n')
+    assert 'iframe[src*="youtube.com"]' in video and "aspect-ratio:16/9" in video
+
+
 def test_page_dependencies_follow_includes_templates_and_css_but_not_source_internals(tmp_path: Path):
     templates = tmp_path / "templates"
     parts = tmp_path / "parts"
