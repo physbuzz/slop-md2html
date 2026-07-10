@@ -9,12 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import html
+import json
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
-import tempfile
 from typing import Any, Callable, Iterable
 
 import mistune
@@ -51,6 +52,10 @@ COMMANDS = {
     ".js": "node {source}",
     ".wl": "wolframscript -file {source}",
     ".m": "wolframscript -file {source}",
+    ".c": "cc {source} -o {slug} && ./{slug}",
+    ".cc": "c++ {source} -o {slug} && ./{slug}",
+    ".cpp": "c++ {source} -o {slug} && ./{slug}",
+    ".cxx": "c++ {source} -o {slug} && ./{slug}",
 }
 
 
@@ -164,60 +169,83 @@ class Executor:
     def __init__(self, settings: Settings, warn: Callable[[str], None]) -> None:
         self.settings = settings
         self.warn = warn
-        self.cache = settings.project_root / ".md2html-cache"
+        self.cache = settings.project_root / ".md2html-cache" / "build"
+        self.inline_count = 0
+
+    @staticmethod
+    def _slug(value: str) -> str:
+        return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-.") or "source"
+
+    def _workspace(self, source: Path, language: str, inline: bool) -> tuple[Path, str]:
+        if inline:
+            self.inline_count += 1
+            slug = self._slug(f"{source.stem}-{language or 'source'}-{self.inline_count}")
+            identity = f"{source.resolve()}\0{language}\0inline\0{self.inline_count}"
+        else:
+            slug = self._slug(source.stem)
+            identity = str(source.resolve())
+        digest = hashlib.sha256(identity.encode()).hexdigest()[:10]
+        return self.cache / f"{slug}-{digest}", slug
 
     def run(self, source: Path, code: str, language: str, inline: bool) -> str | None:
         custom = self.settings.commands.get(language) or self.settings.commands.get(source.suffix.lstrip("."))
         suffix = LANGUAGE_SUFFIXES.get(language.lower(), "." + language) if inline else (source.suffix or "." + language)
-        cache_key = hashlib.sha256((str(source.resolve()) + "\0" + code + "\0" + str(custom)).encode()).hexdigest()
-        cache_file = self.cache / f"{cache_key}.out"
-        if self.settings.output_mode == "site" and cache_file.exists() and not self.settings.regenerate:
-            return cache_file.read_text(encoding="utf-8")
-        temporary: tempfile.TemporaryDirectory[str] | None = None
+        command = custom or COMMANDS.get(suffix.lower())
+        if not command:
+            self.warn(f"no execution command is configured for {language or suffix}")
+            return None
+        builddir, slug = self._workspace(source, language, inline)
+        output_path = builddir / "output.txt"
+        metadata_path = builddir / "execution.json"
+        fingerprint = {
+            "version": 1,
+            "source": str(source.resolve()),
+            "language": language.lower(),
+            "code": code,
+            "command": command,
+            "python": sys.executable,
+        }
+        if not self.settings.regenerate and output_path.is_file() and metadata_path.is_file():
+            try:
+                if json.loads(metadata_path.read_text(encoding="utf-8")) == fingerprint:
+                    return output_path.read_text(encoding="utf-8")
+            except (OSError, json.JSONDecodeError):
+                pass
         run_source = source
-        workdir = source.parent
         try:
+            if builddir.exists():
+                shutil.rmtree(builddir)
+            builddir.mkdir(parents=True)
             if inline:
-                temporary = tempfile.TemporaryDirectory(prefix="md2html-")
-                run_source = Path(temporary.name) / ("source" + suffix)
+                run_source = builddir / (slug + suffix)
                 run_source.write_text(code, encoding="utf-8")
-            command = custom or COMMANDS.get(suffix.lower())
-            if suffix.lower() in {".cc", ".cpp", ".cxx", ".c"} and custom is None:
-                compiler = "cc" if suffix.lower() == ".c" else "c++"
-                executable = run_source.with_suffix(".bin")
-                compile_result = subprocess.run(
-                    [compiler, str(run_source), "-o", str(executable)], cwd=workdir,
-                    text=True, capture_output=True, timeout=60,
-                )
-                if compile_result.returncode:
-                    self.warn(f"could not compile {source}: {compile_result.stderr.strip()}")
-                    return None
-                argv = [str(executable)]
-            elif command:
+            try:
                 formatted = command.format(
                     source=shlex.quote(str(run_source)), python=shlex.quote(sys.executable),
-                    output=shlex.quote(str(run_source.with_suffix(".out"))),
+                    sourcedir=shlex.quote(str(source.parent.resolve())),
+                    builddir=shlex.quote(str(builddir.resolve())), slug=shlex.quote(slug),
+                    output=shlex.quote(str(output_path.resolve())),
                 )
-                argv = ["sh", "-c", formatted]
-            else:
-                self.warn(f"no execution command is configured for {language or suffix}")
+            except (KeyError, ValueError) as error:
+                self.warn(f"invalid execution command for {source}: {error}")
                 return None
-            result = subprocess.run(argv, cwd=workdir, text=True, capture_output=True, timeout=120)
+            result = subprocess.run(
+                ["sh", "-c", formatted], cwd=builddir, text=True, capture_output=True, timeout=120,
+            )
             if result.returncode:
-                detail = result.stderr.strip() or f"exit status {result.returncode}"
+                detail = result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}"
                 self.warn(f"execution failed for {source}: {detail}")
                 return None
-            output = result.stdout
-            if self.settings.output_mode == "site":
-                self.cache.mkdir(parents=True, exist_ok=True)
-                cache_file.write_text(output, encoding="utf-8")
+            if output_path.exists():
+                output = output_path.read_text(encoding="utf-8")
+            else:
+                output = result.stdout
+                output_path.write_text(output, encoding="utf-8")
+            metadata_path.write_text(json.dumps(fingerprint, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             return output
         except (OSError, subprocess.TimeoutExpired) as error:
             self.warn(f"could not execute {source}: {error}")
             return None
-        finally:
-            if temporary:
-                temporary.cleanup()
 
 
 class ContentRenderer:

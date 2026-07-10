@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -114,14 +115,77 @@ def test_include_cycle_warns_without_aborting(tmp_path: Path):
     assert "Include cycle omitted" in result.written[0].read_text(encoding="utf-8")
 
 
-def test_executable_inline_content_has_output_and_no_cache(tmp_path: Path):
+def test_executable_inline_content_uses_a_persistent_workspace(tmp_path: Path):
     output = build_one(
         tmp_path,
         "# Run\n\n@src-begin(python, execute, expanded)\nprint(6 * 7)\n@src-end\n",
         execute=True,
     )
     assert "code-output" in output and "42" in output
-    assert not (tmp_path / ".md2html-cache").exists()
+    workspaces = list((tmp_path / ".md2html-cache" / "build").iterdir())
+    assert len(workspaces) == 1
+    assert (workspaces[0] / "output.txt").read_text() == "42\n"
+    assert (workspaces[0] / "execution.json").is_file()
+    assert list(workspaces[0].glob("*.py"))
+
+
+def test_file_execution_runs_in_a_stable_clean_workspace(tmp_path: Path):
+    source = tmp_path / "program.py"
+    source.write_text(
+        "from pathlib import Path\nPath('old-image.txt').write_text('old')\nprint(Path.cwd().name)\n",
+        encoding="utf-8",
+    )
+    output = build_one(tmp_path, "# Run\n\n@src(program.py, execute)\n", execute=True)
+    workspaces = list((tmp_path / ".md2html-cache" / "build").iterdir())
+    assert len(workspaces) == 1
+    workspace = workspaces[0]
+    assert workspace.name in output
+    assert (workspace / "old-image.txt").read_text() == "old"
+    assert not (tmp_path / "old-image.txt").exists()
+
+    (workspace / "cache-hit.txt").write_text("preserved", encoding="utf-8")
+    build_one(tmp_path, "# Run\n\n@src(program.py, execute)\n", execute=True)
+    assert (workspace / "cache-hit.txt").read_text() == "preserved"
+
+    source.write_text(
+        "from pathlib import Path\nPath('new-image.txt').write_text('new')\nprint('changed')\n",
+        encoding="utf-8",
+    )
+    output = build_one(tmp_path, "# Run\n\n@src(program.py, execute)\n", execute=True)
+    assert list((tmp_path / ".md2html-cache" / "build").iterdir()) == [workspace]
+    assert "changed" in output
+    assert not (workspace / "old-image.txt").exists()
+    assert not (workspace / "cache-hit.txt").exists()
+    assert (workspace / "new-image.txt").read_text() == "new"
+
+
+def test_custom_command_can_write_output_and_inspect_workspace(tmp_path: Path):
+    (tmp_path / "example.demo").write_text("ignored\n", encoding="utf-8")
+    command = "printf '%s' {slug} > {output}; printf '%s' {builddir} > workspace.txt; printf '%s' {sourcedir} > sourcedir.txt"
+    output = build_one(
+        tmp_path, "# Run\n\n@src(example.demo, execute)\n", execute=True,
+        commands={"demo": command},
+    )
+    workspace = next((tmp_path / ".md2html-cache" / "build").iterdir())
+    assert "example" in output
+    assert (workspace / "output.txt").read_text() == "example"
+    assert Path((workspace / "workspace.txt").read_text()) == workspace
+    assert Path((workspace / "sourcedir.txt").read_text()) == tmp_path
+    assert not (tmp_path / "example.out").exists()
+
+
+@pytest.mark.skipif(shutil.which("c++") is None, reason="c++ is required")
+def test_cpp_build_products_stay_in_workspace(tmp_path: Path):
+    (tmp_path / "message.h").write_text('#define MESSAGE "cpp output\\n"\n', encoding="utf-8")
+    (tmp_path / "file.cpp").write_text(
+        '#include <iostream>\n#include "message.h"\nint main() { std::cout << MESSAGE; }\n', encoding="utf-8",
+    )
+    output = build_one(tmp_path, "# Run\n\n@src(file.cpp, execute)\n", execute=True)
+    workspace = next((tmp_path / ".md2html-cache" / "build").iterdir())
+    assert "cpp output" in output
+    assert (workspace / "file").is_file()
+    assert not (tmp_path / "file.bin").exists()
+    assert not (tmp_path / "file.out").exists()
 
 
 def site_fixture(tmp_path: Path) -> tuple[Path, Path]:

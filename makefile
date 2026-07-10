@@ -9,4 +9,4 @@ test:
 	.venv/bin/python -m pytest -q
 
 clean:
-	rm -rf build dist *.egg-info .pytest_cache
+	rm -rf build dist *.egg-info .pytest_cache .md2html-cache

@@ -170,18 +170,27 @@ C, C++, and Wolfram Language have conventional default commands. A missing
 runtime, compilation error, nonzero exit, or timeout becomes a warning; the
 page still builds.
 
-Native sites cache successful output in `.md2html-cache`. `--regenerate` (or
-`-f`) forces programs to run again. Standalone inline examples use temporary
-files and do not create a cache directory.
+Executable content gets an isolated, persistent workspace under
+`.md2html-cache/build`. The command runs with that workspace as its current
+directory, so compiled programs and files created with relative paths do not
+pollute the source tree. Successful output is cached there. `--regenerate` (or
+`-f`) cleans the workspace and runs the command again.
 
 Commands can be added or replaced in configuration. `{source}`, `{output}`,
-and `{python}` are available in command strings:
+`{sourcedir}`, `{builddir}`, `{slug}`, and `{python}` are available in command
+strings. For `@src`, `{source}` is the absolute original file; inline source is
+staged inside the workspace. `{slug}` is the safe source stem and `{output}` is
+an `output.txt` file inside the build directory:
 
 ```yaml
 commands:
   julia: julia {source}
-  txt: my-interpreter {source}
+  cpp: g++ {source} -o {slug} && ./{slug} > {output}
 ```
+
+If a command creates `{output}`, its contents appear below the source.
+Otherwise md2html uses stdout and saves it to `{output}`. Other generated files
+remain in the workspace for inspection but are not copied into the website.
 
 Only use executable content from sources you trust.
 
