@@ -19,7 +19,7 @@ from watchdog.observers import Observer
 
 from . import __version__
 from .project import BuildResult, Project
-from .settings import EXAMPLE_CONFIG, EXAMPLE_JSON, MathSettings, Settings, find_config, load_settings
+from .settings import EXAMPLE_CONFIG, EXAMPLE_JSON, MathSettings, Settings, find_config, load_settings, normal_path
 
 
 def parser() -> argparse.ArgumentParser:
@@ -39,7 +39,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-o", "--output", type=Path, help="output file or directory")
     result.add_argument("-e", "--execute", action="store_true", help="run executable @src content and show its output")
     result.add_argument("-r", "--recursive", action="store_true", help="render Markdown in subdirectories")
-    result.add_argument("-f", "--regenerate", action="store_true", help="rerun executable content instead of using fresh results")
+    result.add_argument("-f", "--force", action="store_true", help="rerun executable content or replace an existing example file")
     result.add_argument("-s", "--serve", action="store_true", help="serve the output and rebuild when source files change")
     result.add_argument("-w", "--watch", action="store_true", help="rebuild when source files change without starting a server")
     result.add_argument("--port", type=int, default=8000, help="preview server port (default: 8000)")
@@ -57,7 +57,6 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--example-json", nargs="?", const="md2html.json", metavar="PATH", help="write a starter JSON config; use - for stdout")
     result.add_argument("--example-template", nargs="?", const="templates/page.html", metavar="PATH", help="write the default page template; use - for stdout")
     result.add_argument("--example-css", nargs="?", const="templates/page.css", metavar="PATH", help="write the default page CSS; use - for stdout")
-    result.add_argument("--force", action="store_true", help="replace an existing example file")
     result.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return result
 
@@ -81,36 +80,36 @@ def _write_example(value: str, destination: str, force: bool) -> int:
 
 
 def settings_from_args(args: argparse.Namespace) -> Settings:
-    config = args.config.resolve() if args.config else None
+    config = normal_path(args.config) if args.config else None
     if config is None and args.input is None:
-        config = find_config(Path.cwd())
+        config = find_config(Path("."))
         if config is None:
             raise ValueError("give a Markdown file, a directory, or --config")
     elif config is None and args.input and args.input.is_dir():
-        config = find_config(args.input.resolve())
+        config = find_config(normal_path(args.input))
     if config:
         if not config.is_file():
             raise ValueError(f"configuration does not exist: {config}")
         settings = load_settings(config)
         if args.input is not None:
-            settings = replace(settings, input=args.input.expanduser().resolve())
+            settings = replace(settings, input=normal_path(args.input))
     else:
-        source = args.input.expanduser().resolve()
+        source = normal_path(args.input)
         if source.is_file():
-            output = args.output.expanduser().resolve() if args.output else None
+            output = normal_path(args.output) if args.output else None
             if output and output.is_dir():
                 output = output / source.with_suffix(".html").name
             settings = Settings.single(source, output)
         else:
-            output = (args.output or Path("html")).expanduser().resolve()
+            output = normal_path(args.output or Path("html"))
             settings = Settings(input=source, output=output, project_root=source, recursive=args.recursive)
     changes = {}
     if args.output is not None and not (args.input and args.input.is_file() and not config):
-        changes["output"] = args.output.expanduser().resolve()
+        changes["output"] = normal_path(args.output)
     if args.output_mode:
         changes["output_mode"] = args.output_mode
     if args.templates:
-        changes["templates"] = args.templates.expanduser().resolve()
+        changes["templates"] = normal_path(args.templates)
     if args.template:
         changes["template"] = args.template
     if args.css is not None:
@@ -123,8 +122,8 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         changes["math"] = replace(changes.get("math", settings.math), chtml_fonts=args.math_fonts)
     if args.execute:
         changes["execute"] = True
-    if args.regenerate:
-        changes["regenerate"] = True
+    if args.force:
+        changes["force"] = True
     if args.recursive:
         changes["recursive"] = True
     if args.clean:
@@ -153,12 +152,12 @@ class WatchGraph:
         self.edges = {dependency: linked for dependency, linked in self.edges.items() if linked}
         for page, dependencies in pages.items():
             for dependency in dependencies:
-                dependency = dependency.resolve()
+                dependency = dependency.absolute()
                 self.seen.add(dependency)
-                self.edges.setdefault(dependency, set()).add(page.resolve())
+                self.edges.setdefault(dependency, set()).add(page.absolute())
 
     def affected(self, paths: set[Path]) -> set[Path]:
-        return set().union(*(self.edges.get(path.resolve(), set()) for path in paths))
+        return set().union(*(self.edges.get(path.absolute(), set()) for path in paths))
 
     @property
     def pages(self) -> set[Path]:
@@ -205,7 +204,7 @@ def watch(settings: Settings, *, serve: bool, port: int) -> int:
                 return
             for name in (getattr(event, "src_path", None), getattr(event, "dest_path", None)):
                 if name:
-                    path = Path(name).resolve()
+                    path = Path(name).absolute()
                     if not ignored(path):
                         changes.put(path)
 
@@ -215,7 +214,7 @@ def watch(settings: Settings, *, serve: bool, port: int) -> int:
     def add_roots() -> None:
         source = settings.input if settings.input.is_dir() else settings.input.parent
         roots = {settings.project_root, source, *(path.parent for path in graph.edges)}
-        for root in sorted((path.resolve() for path in roots if path.exists()), key=lambda path: len(path.parts)):
+        for root in sorted((path.absolute() for path in roots if path.exists()), key=lambda path: len(path.parts)):
             if not any(root.is_relative_to(existing) for existing in watched):
                 observer.schedule(Handler(), str(root), recursive=True)
                 watched.append(root)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import socket
@@ -13,7 +14,7 @@ import pytest
 from md2html2.cli import WatchGraph, _server, main, parser, settings_from_args
 from md2html2.project import Project
 from md2html2.render import parse_frontmatter
-from md2html2.settings import MathSettings, Settings, load_settings
+from md2html2.settings import MathSettings, Settings, load_settings, normal_path
 
 
 def build_one(tmp_path: Path, text: str, **changes) -> str:
@@ -135,12 +136,12 @@ def test_page_dependencies_follow_includes_templates_and_css_but_not_source_inte
     source.write_text("@include(parts/one.md)\n\n@src(file.cpp)\n", encoding="utf-8")
     settings = Settings.single(source).with_cli(templates=templates)
     result = Project(settings).build()
-    dependencies = result.page_dependencies[source.resolve()]
+    dependencies = result.page_dependencies[source]
     expected = {source, parts / "one.md", parts / "two.md", tmp_path / "file.cpp",
                 templates / "page.html", templates / "outer.html", templates / "inner.html",
                 templates / "page.css", css / "one.css", css / "two.css"}
-    assert {path.resolve() for path in expected} <= dependencies
-    assert (tmp_path / "header.h").resolve() not in dependencies
+    assert expected <= dependencies
+    assert tmp_path / "header.h" not in dependencies
 
 
 def test_watch_graph_replaces_stale_page_edges_after_partial_build(tmp_path: Path):
@@ -156,16 +157,16 @@ def test_watch_graph_replaces_stale_page_edges_after_partial_build(tmp_path: Pat
     settings = Settings(input=source, output=output, project_root=tmp_path, recursive=True)
     graph = WatchGraph()
     graph.update(Project(settings).build().page_dependencies, reset=True)
-    assert graph.affected({shared}) == {first.resolve(), second.resolve()}
+    assert graph.affected({shared}) == {first, second}
 
     first.write_text("independent\n", encoding="utf-8")
-    partial = Project(settings).build({first.resolve()})
+    partial = Project(settings).build({first})
     assert partial.written == [output / "first.html"]
     graph.update(partial.page_dependencies)
-    assert graph.affected({shared}) == {second.resolve()}
+    assert graph.affected({shared}) == {second}
     second.write_text("also independent\n", encoding="utf-8")
-    graph.update(Project(settings).build({second.resolve()}).page_dependencies)
-    assert shared.resolve() in graph.seen
+    graph.update(Project(settings).build({second}).page_dependencies)
+    assert shared in graph.seen
     assert not graph.affected({shared})
 
 
@@ -200,8 +201,79 @@ def test_executable_inline_content_uses_a_persistent_workspace(tmp_path: Path):
     cached = workspaces(page_cache(tmp_path))
     assert len(cached) == 1
     assert (cached[0] / "output.txt").read_text() == "42\n"
-    assert (cached[0] / "execution.json").is_file()
+    assert (cached[0] / ".complete").is_file()
     assert list(cached[0].glob("*.py"))
+
+
+def test_committed_cache_is_portable_and_used_without_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    first = tmp_path / "first-checkout"
+    second = tmp_path / "github-checkout"
+    first.mkdir()
+    monkeypatch.chdir(first)
+    Path("article.md").write_text(
+        "# Cached\n\n@src-begin(python, execute)\nprint('portable output')\n@src-end\n", encoding="utf-8",
+    )
+    settings = Settings.single(Path("article.md")).with_cli(execute=True)
+    Project(settings).build()
+    first_workspace = workspaces(page_cache(Path(".")))[0].name
+    cache_text = "".join(path.read_text(encoding="utf-8") for path in Path(".md2html-cache").rglob("*") if path.is_file())
+    assert str(first) not in cache_text and "execution.json" not in cache_text
+    shutil.copytree(first, second)
+
+    monkeypatch.chdir(second)
+    assert main(["article.md"]) == 0
+    assert "portable output" in Path("article.html").read_text(encoding="utf-8")
+    restored = Settings.single(Path("article.md")).with_cli(
+        force=True, commands={"python": "exit 99"}, site_data={"unrelated": "change"},
+    )
+    result = Project(restored).build()
+    output = Path("article.html").read_text(encoding="utf-8")
+    assert "portable output" in output
+    assert not result.warnings
+    assert workspaces(page_cache(Path(".")))[0].name == first_workspace
+    assert restored.input == Path("article.md") and restored.project_root == Path(".")
+
+
+def test_only_source_content_invalidates_cached_output(tmp_path: Path):
+    source = tmp_path / "article.md"
+    source.write_text(
+        "@src-begin(python, execute)\nprint('old output')\n@src-end\n", encoding="utf-8",
+    )
+    Project(Settings.single(source).with_cli(execute=True)).build()
+    source.write_text(
+        "@src-begin(python, execute)\nprint('new output')\n@src-end\n", encoding="utf-8",
+    )
+    result = Project(Settings.single(source)).build()
+    output = result.written[0].read_text(encoding="utf-8")
+    assert '<pre class="code-output">' not in output
+    assert any("no cached output" in warning for warning in result.warnings)
+
+
+def test_strict_legacy_cache_is_migrated_without_execution(tmp_path: Path):
+    code = "print('legacy output')\n"
+    source = tmp_path / "article.md"
+    source.write_text(f"@src-begin(python, execute)\n{code}@src-end\n", encoding="utf-8")
+    legacy = page_cache(tmp_path) / "python-1-machine-specific-hash"
+    legacy.mkdir(parents=True)
+    (legacy / "output.txt").write_text("legacy output\n", encoding="utf-8")
+    (legacy / "execution.json").write_text(json.dumps({"code": code, "source": "/old/checkout/article.md"}))
+    result = Project(Settings.single(source)).build()
+    output = result.written[0].read_text(encoding="utf-8")
+    migrated = workspaces(page_cache(tmp_path))[0]
+    assert "legacy output" in output and not result.warnings
+    assert migrated != legacy and (migrated / ".complete").is_file()
+
+
+def test_cached_output_survives_page_output_move(tmp_path: Path):
+    source = tmp_path / "article.md"
+    source.write_text(
+        "@src-begin(python, execute)\nprint('moved page output')\n@src-end\n", encoding="utf-8",
+    )
+    Project(Settings.single(source, tmp_path / "old.html").with_cli(execute=True)).build()
+    result = Project(Settings.single(source, tmp_path / "new.html")).build()
+    assert "moved page output" in result.written[0].read_text(encoding="utf-8")
+    assert not result.warnings
+    assert workspaces(page_cache(tmp_path, "new.html"))[0].name == workspaces(page_cache(tmp_path, "old.html"))[0].name
 
 
 def test_file_execution_runs_in_a_stable_clean_workspace(tmp_path: Path):
@@ -244,9 +316,19 @@ def test_custom_command_can_write_output_and_inspect_workspace(tmp_path: Path):
     workspace = workspaces(page_cache(tmp_path))[0]
     assert "example" in output
     assert (workspace / "output.txt").read_text() == "example"
-    assert Path((workspace / "workspace.txt").read_text()) == workspace
-    assert Path((workspace / "sourcedir.txt").read_text()) == tmp_path
+    assert (workspace / "workspace.txt").read_text() == "."
+    assert normal_path(workspace / (workspace / "sourcedir.txt").read_text()) == tmp_path
     assert not (tmp_path / "example.out").exists()
+
+
+def test_force_refreshes_cached_output_when_execution_is_enabled(tmp_path: Path):
+    (tmp_path / "example.demo").write_text("source\n", encoding="utf-8")
+    page = "@src(example.demo, execute)\n"
+    build_one(tmp_path, page, execute=True, commands={"demo": "printf old > {output}"})
+    output = build_one(
+        tmp_path, page, execute=True, force=True, commands={"demo": "printf new > {output}"},
+    )
+    assert '<pre class="code-output"><code>new</code></pre>' in output
 
 
 @pytest.mark.skipif(shutil.which("c++") is None, reason="c++ is required")
@@ -457,6 +539,16 @@ def test_config_paths_are_relative_to_config(tmp_path: Path):
     assert settings.math.chtml_fonts == "inline"
 
 
+def test_relative_config_keeps_relative_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    Path("md2html.json").write_text('{"input":"content","output":"public","templates":"templates"}')
+    settings = load_settings(Path("md2html.json"))
+    assert settings.project_root == Path(".")
+    assert settings.input == Path("content")
+    assert settings.output == Path("public")
+    assert settings.templates == Path("templates")
+
+
 def test_template_directory_and_companion_css_take_priority(tmp_path: Path):
     templates = tmp_path / "templates"
     templates.mkdir()
@@ -468,14 +560,17 @@ def test_template_directory_and_companion_css_take_priority(tmp_path: Path):
 
 
 def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch):
-    source = tmp_path / "one.md"
+    monkeypatch.chdir(tmp_path)
+    source = Path("one.md")
     source.write_text("# One\n")
     args = parser().parse_args(["-erf", str(source)])
     settings = settings_from_args(args)
-    assert settings.execute and settings.recursive and settings.regenerate
-    monkeypatch.chdir(tmp_path)
+    assert settings.execute and settings.recursive and settings.force
+    assert settings.input == source and settings.output == Path("one.html")
     assert main(["--example-config"]) == 0
     assert (tmp_path / "md2html.config").is_file()
+    assert main(["--example-config"]) == 2
+    assert main(["--example-config", "--force"]) == 0
     assert main(["--example-json"]) == 0
     assert (tmp_path / "md2html.json").read_text().startswith("{")
     assert main(["--example-template", "-"]) == 0

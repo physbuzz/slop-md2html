@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,10 @@ import yaml
 
 
 CONFIG_NAMES = ("md2html.json", "md2html.yml", "md2html.yaml", "md2html.config")
+
+
+def normal_path(path: Path) -> Path:
+    return Path(os.path.normpath(path.expanduser()))
 
 
 @dataclass(frozen=True)
@@ -24,13 +29,13 @@ class Settings:
     input: Path
     output: Path
     output_mode: str = "pages"
-    project_root: Path = field(default_factory=Path.cwd)
+    project_root: Path = field(default_factory=lambda: Path("."))
     templates: Path | None = None
     template: str = "page.html"
     css: tuple[str, ...] | None = None
     math: MathSettings = field(default_factory=MathSettings)
     execute: bool = False
-    regenerate: bool = False
+    force: bool = False
     recursive: bool = False
     clean: bool = False
     exclude: tuple[str, ...] = ()
@@ -39,10 +44,10 @@ class Settings:
 
     @classmethod
     def single(cls, source: Path, output: Path | None = None) -> "Settings":
-        source = source.resolve()
+        source = normal_path(source)
         return cls(
             input=source,
-            output=(output or source.with_suffix(".html")).resolve(),
+            output=normal_path(output or source.with_suffix(".html")),
             project_root=source.parent,
         )
 
@@ -51,12 +56,13 @@ class Settings:
 
 
 def find_config(start: Path) -> Path | None:
-    directory = start if start.is_dir() else start.parent
+    relative = not start.is_absolute()
+    directory = (start if start.is_dir() else start.parent).absolute()
     for directory in (directory, *directory.parents):
         for name in CONFIG_NAMES:
             candidate = directory / name
             if candidate.is_file():
-                return candidate
+                return normal_path(Path(os.path.relpath(candidate))) if relative else candidate
     return None
 
 
@@ -74,13 +80,13 @@ def read_mapping(path: Path) -> dict[str, Any]:
 
 
 def load_settings(config_path: Path) -> Settings:
-    config_path = config_path.resolve()
+    config_path = normal_path(config_path)
     root = config_path.parent
     raw = read_mapping(config_path)
 
     def path_value(name: str, default: str) -> Path:
-        value = Path(str(raw.get(name, default))).expanduser()
-        return value if value.is_absolute() else (root / value).resolve()
+        value = normal_path(Path(str(raw.get(name, default))))
+        return value if value.is_absolute() else normal_path(root / value)
 
     math_value = raw.get("math", {})
     if isinstance(math_value, str):
@@ -102,7 +108,7 @@ def load_settings(config_path: Path) -> Settings:
         raise ValueError("output_mode must be 'pages' or 'site'")
     reserved = {
         "input", "output", "output_mode", "templates", "template", "css", "math",
-        "execute", "regenerate", "recursive", "clean", "exclude", "commands", "site",
+        "execute", "force", "recursive", "clean", "exclude", "commands", "site",
     }
     site_data = dict(raw.get("site") or {})
     site_data.update({key: value for key, value in raw.items() if key not in reserved})
@@ -116,7 +122,7 @@ def load_settings(config_path: Path) -> Settings:
         css=None if css is None else tuple(str(item) for item in css),
         math=MathSettings(backend=str(math_value.get("backend", "mathjax")), chtml_fonts=font_mode),
         execute=bool(raw.get("execute", False)),
-        regenerate=bool(raw.get("regenerate", False)),
+        force=bool(raw.get("force", False)),
         recursive=bool(raw.get("recursive", mode == "site")),
         clean=bool(raw.get("clean", False)),
         exclude=tuple(str(item) for item in raw.get("exclude", ())),

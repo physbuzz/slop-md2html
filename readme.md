@@ -163,9 +163,9 @@ print(sum(range(10)))
 @src-end
 ```
 
-Inline source is display-only unless the build also uses `--execute`. The same
-is true for the `execute` flag: it documents intent but never causes a program
-to run without the command-line or config permission.
+Inline source is display-only when it has neither cached output nor
+`--execute`. The `execute` flag documents intent but never causes a program to
+run without command-line or config permission.
 
 ## Executable content
 
@@ -178,16 +178,37 @@ page still builds.
 Executable content gets an isolated, persistent workspace under a cache tree
 that follows the website's output paths. For example, executable blocks in
 `guide/index.html` use `.md2html-cache/pages/guide/index.html/`. Each block has
-a fingerprinted subdirectory. The command runs there, so compiled programs and
-files created with relative paths do not pollute the source tree. Successful
-output is cached; `--regenerate` (or `-f`) reruns the command.
+a source-content checksum subdirectory. The command runs there, so compiled
+programs and files created with relative paths do not pollute the source tree.
+Successful output is marked complete and cached; `--force` (or `-f`) reruns it
+when execution is enabled.
+
+Valid cached output is always included in the page, even without `--execute`.
+The checksum depends only on the displayed source—not checkout paths, Python
+or compiler locations, commands, settings, or cache format fields. This makes
+`.md2html-cache` suitable for committing to a repository or restoring in
+GitHub Actions. A cache-only build needs no language runtimes: install
+md2html and its MathJax packages, restore or check out the cache, and build
+normally without `--execute`.
+
+```console
+# Run from the website repository, where the cache is not ignored.
+git add .md2html-cache
+md2html --config md2html.config
+```
+
+Changing the source text selects a new cache entry. Changing checkout paths,
+commands, runtimes, settings, or md2html metadata does not; use
+`--execute --force` when one of those changes should refresh output. If
+an `execute` block has no matching cache and execution is disabled, the page
+still builds and reports how to populate it.
 
 Commands can be added or replaced in configuration. `{source}`, `{output}`,
 `{sourcedir}`, `{builddir}`, `{slug}`, `{executable}`, and `{python}` are
 available in command strings. `{filename}` is an alias for `{source}`. For
-`@src`, the source is the absolute original file; inline source is staged
-inside the workspace. `{executable}` is a `slug.md2html-out` path and `{output}`
-is an `output.txt` path in the same directory:
+`@src`, the source is relative to the workspace; inline source is staged there.
+`{sourcedir}` is also relative, `{builddir}` is `.`, `{executable}` is a
+`slug.md2html-out` path, and `{output}` is `output.txt`:
 
 ```yaml
 commands:

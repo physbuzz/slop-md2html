@@ -17,7 +17,7 @@ import yaml
 from liquid.exceptions import LiquidError
 
 from .render import ContentRenderer, Executor, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
-from .settings import Settings
+from .settings import Settings, normal_path
 
 
 SOURCE_SUFFIXES = {".md", ".markdown"}
@@ -103,7 +103,8 @@ class Project:
         result = BuildResult()
         pages = self._discover_pages()
         self._populate_site(pages)
-        selected = pages if only is None else [page for page in pages if page.source.resolve() in only]
+        wanted = None if only is None else {path.absolute() for path in only}
+        selected = pages if wanted is None else [page for page in pages if page.source.absolute() in wanted]
         if only is None and self.settings.clean and self.settings.output_mode == "site" and self.settings.output.exists():
             shutil.rmtree(self.settings.output)
         for page in selected:
@@ -136,7 +137,7 @@ class Project:
             result.written.append(target)
             result.warnings.extend(rendered.warnings)
             result.dependencies.update(rendered.dependencies)
-            result.page_dependencies[page.source.resolve()] = rendered.dependencies
+            result.page_dependencies[page.source] = rendered.dependencies
         if only is None and self.settings.output_mode == "site":
             self._prune_math_assets()
         if only is None and self.settings.input.is_dir():
@@ -151,8 +152,8 @@ class Project:
         if not self.settings.input.exists():
             raise ValueError(f"input does not exist: {self.settings.input}")
         if self.settings.input.is_dir():
-            source = self.settings.input.resolve()
-            output = self.settings.output.resolve()
+            source = self.settings.input.absolute()
+            output = self.settings.output.absolute()
             if source == output:
                 raise ValueError("site output cannot be the input directory")
             if self.settings.clean and source.is_relative_to(output):
@@ -347,7 +348,7 @@ class Project:
             if not path:
                 rendered.warnings.append(f"layout not found for {source}: {name}")
                 break
-            rendered.dependencies.add(path.resolve())
+            rendered.dependencies.add(path)
             metadata, template = parse_frontmatter(path.read_text(encoding="utf-8"))
             try:
                 content = self.liquid.from_string(liquid_source(template)).render(site=self.site, page=page, content=content, layout=metadata)
@@ -371,7 +372,7 @@ class Project:
         path = self._find_layout(self.settings.template)
         if path is None:
             raise ValueError(f"template not found: {self.settings.template}")
-        rendered.dependencies.add(path.resolve())
+        rendered.dependencies.add(path)
         css = self._css(rendered, path)
         backend = self.settings.math.backend.lower()
         context = {
@@ -424,7 +425,7 @@ class Project:
         return "\n".join(values)
 
     def _track_css(self, path: Path, dependencies: set[Path], value: str | None = None) -> None:
-        path = path.resolve()
+        path = normal_path(path)
         if path in dependencies:
             return
         dependencies.add(path)
@@ -522,9 +523,9 @@ class Project:
         return self.settings.output / page.output_relative
 
     def _copy_static(self, pages: list[Page], result: BuildResult) -> None:
-        page_sources = {page.source.resolve() for page in pages}
+        page_sources = {page.source for page in pages}
         for source in sorted(self.source_root.rglob("*")):
-            if not source.is_file() or source.resolve() in page_sources or self._excluded(source):
+            if not source.is_file() or source in page_sources or self._excluded(source):
                 continue
             relative = source.relative_to(self.source_root)
             if relative.name in PROJECT_FILES or any(part in {"_layouts", "_includes", "_posts"} for part in relative.parts):
@@ -532,7 +533,7 @@ class Project:
             if source.suffix.lower() in SOURCE_SUFFIXES:
                 continue
             target = self.settings.output / relative
-            if source.resolve() == target.resolve():
+            if source.absolute() == target.absolute():
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)

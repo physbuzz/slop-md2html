@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 import hashlib
 import html
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -26,7 +27,7 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
-from .settings import Settings
+from .settings import Settings, normal_path
 
 
 FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
@@ -71,9 +72,9 @@ class TrackingLoader(FileSystemLoader):
         try:
             source = super().get_source(env, template_name, **kwargs)
         except LiquidError:
-            self.dependencies.update((Path(path) / template_name).resolve() for path in self.search_path)
+            self.dependencies.update(normal_path(Path(path) / template_name) for path in self.search_path)
             raise
-        self.dependencies.add(Path(source.name).resolve())
+        self.dependencies.add(normal_path(Path(source.name)))
         return source
 
 
@@ -185,15 +186,12 @@ def split_args(value: str) -> tuple[str, set[str]]:
 
 
 class Executor:
-    CACHE_VERSION = 2
-
     def __init__(self, settings: Settings, page: Path, warn: Callable[[str], None]) -> None:
         self.settings = settings
         self.warn = warn
         self.page = page
         self.cache = self.page_root(settings, page)
         self.active: set[Path] = set()
-        self.inline_count = 0
         self.cleanup_safe = True
 
     @staticmethod
@@ -209,46 +207,42 @@ class Executor:
         parts = [cls._slug(part) for part in page.parts if part not in {"", ".", "..", page.anchor}]
         return cls.pages_root(settings).joinpath(*(parts or ["index.html"]))
 
-    def _workspace(
-        self, source: Path, code: str, language: str, inline: bool, command: str | None,
-    ) -> tuple[Path, str, dict[str, Any]]:
-        if inline:
-            self.inline_count += 1
-            slug = self._slug(f"{language or 'source'}-{self.inline_count}")
-        else:
-            slug = self._slug(source.stem)
-        fingerprint = {
-            "version": self.CACHE_VERSION,
-            "source": str(source.resolve()),
-            "language": language.lower(),
-            "code": code,
-            "command": command,
-            "python": sys.executable,
-        }
-        encoded = json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()
-        digest = hashlib.sha256(encoded).hexdigest()[:12]
-        builddir = self.cache / f"{slug}-{digest}"
+    def _workspace(self, source: Path, code: str, language: str, inline: bool) -> tuple[Path, str]:
+        slug = self._slug(language or "source") if inline else self._slug(source.stem)
+        name = self._slug(language or source.suffix.lstrip(".") or "source")
+        builddir = self.cache / f"{name}-{hashlib.sha256(code.encode()).hexdigest()[:12]}"
+        root = self.pages_root(self.settings)
+        if not builddir.exists() and root.exists():
+            for output in root.rglob("output.txt"):
+                old = output.parent
+                try:
+                    current = old.name == builddir.name and (old / ".complete").is_file()
+                    legacy = current or json.loads((old / "execution.json").read_text(encoding="utf-8")).get("code") == code
+                    if legacy:
+                        builddir.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copytree(old, builddir)
+                        break
+                except (OSError, json.JSONDecodeError):
+                    pass
         self.active.add(builddir)
-        return builddir, slug, fingerprint
+        return builddir, slug
 
-    def run(self, source: Path, code: str, language: str, inline: bool, *, enabled: bool) -> str | None:
+    def run(self, source: Path, code: str, language: str, inline: bool, *, enabled: bool, use_cache: bool) -> str | None:
         custom = self.settings.commands.get(language) or self.settings.commands.get(source.suffix.lstrip("."))
         suffix = LANGUAGE_SUFFIXES.get(language.lower(), "." + language) if inline else (source.suffix or "." + language)
         command = custom or COMMANDS.get(suffix.lower())
-        builddir, slug, fingerprint = self._workspace(source, code, language, inline, command)
+        builddir, slug = self._workspace(source, code, language, inline)
+        output_path = builddir / "output.txt"
+        complete = builddir / ".complete"
+        legacy = builddir / "execution.json"
+        if use_cache and output_path.is_file() and (complete.is_file() or legacy.is_file()) and (not self.settings.force or not enabled):
+            complete.touch()
+            return output_path.read_text(encoding="utf-8")
         if not enabled:
             return None
         if command is None:
             self.warn(f"no execution command is configured for {language or suffix}")
             return None
-        output_path = builddir / "output.txt"
-        metadata_path = builddir / "execution.json"
-        if not self.settings.regenerate and output_path.is_file() and metadata_path.is_file():
-            try:
-                if json.loads(metadata_path.read_text(encoding="utf-8")) == fingerprint:
-                    return output_path.read_text(encoding="utf-8")
-            except (OSError, json.JSONDecodeError):
-                pass
         run_source = source
         try:
             if builddir.exists():
@@ -258,14 +252,16 @@ class Executor:
                 run_source = builddir / (slug + suffix)
                 run_source.write_text(code, encoding="utf-8")
             executable = builddir / f"{slug}.md2html-out"
+
+            def relative(path: Path) -> str:
+                return shlex.quote(os.path.relpath(path, builddir))
+
             try:
                 formatted = command.format(
-                    source=shlex.quote(str(run_source)), filename=shlex.quote(str(run_source)),
+                    source=relative(run_source), filename=relative(run_source),
                     python=shlex.quote(sys.executable),
-                    sourcedir=shlex.quote(str(source.parent.resolve())),
-                    builddir=shlex.quote(str(builddir.resolve())), slug=shlex.quote(slug),
-                    executable=shlex.quote(str(executable.resolve())),
-                    output=shlex.quote(str(output_path.resolve())),
+                    sourcedir=relative(source.parent), builddir=".", slug=shlex.quote(slug),
+                    executable=shlex.quote("./" + os.path.relpath(executable, builddir)), output=relative(output_path),
                 )
             except (KeyError, ValueError) as error:
                 self.warn(f"invalid execution command for {source}: {error}")
@@ -282,7 +278,7 @@ class Executor:
             else:
                 output = result.stdout
                 output_path.write_text(output, encoding="utf-8")
-            metadata_path.write_text(json.dumps(fingerprint, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            complete.touch()
             return output
         except (OSError, subprocess.TimeoutExpired) as error:
             self.warn(f"could not execute {source}: {error}")
@@ -303,7 +299,7 @@ class Executor:
             existing = sorted(path.name for path in self.active if path.is_dir())
             manifest = self.cache / "manifest.json"
             if existing:
-                value = {"version": self.CACHE_VERSION, "page": self.page.as_posix(), "workspaces": existing}
+                value = {"page": self.page.as_posix(), "workspaces": existing}
                 temporary = manifest.with_suffix(".tmp")
                 temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 temporary.replace(manifest)
@@ -419,12 +415,14 @@ class ContentRenderer:
         self, body: str, origin: Path, context: dict[str, Any], stash: Stash, features: Features,
         dependencies: set[Path], warnings: list[str], executor: Executor, stack: tuple[Path, ...],
     ) -> str:
+        origin = normal_path(origin)
+
         def replace(match: re.Match[str]) -> str:
             kind, raw = match.group(1), match.group(2)
             name, flags = split_args(raw)
-            path = (origin.parent / name).resolve()
+            path = normal_path(origin.parent / name)
             dependencies.add(path)
-            if path in stack or path == origin.resolve() and kind == "include":
+            if path in stack or path == origin and kind == "include":
                 chain = " -> ".join(str(item) for item in (*stack, path))
                 warnings.append(f"include cycle: {chain}")
                 return stash.put('<aside class="warning">Include cycle omitted.</aside>', block=True)
@@ -437,7 +435,7 @@ class ContentRenderer:
                 _, value = parse_frontmatter(value)
                 self._validate_source_blocks(path, value)
                 return self._expand_directives(
-                    value, path, context, stash, features, dependencies, warnings, executor, (*stack, origin.resolve()),
+                    value, path, context, stash, features, dependencies, warnings, executor, (*stack, origin),
                 )
             language = path.suffix.lstrip(".") or "text"
             return self._source_box(path, value, language, flags, False, executor, stash, features)
@@ -460,9 +458,9 @@ class ContentRenderer:
             label = html.escape(source.name if not inline else f"{language} source")
             code_markup = f'<details class="source"{open_attr}><summary>{label}</summary>{code_markup}</details>'
         should_run = self.settings.execute and "noexecute" not in flags
-        if "execute" in flags and not self.settings.execute:
-            executor.warn(f"execution requested for {source}; rerun with --execute")
-        output = executor.run(source, code, language, inline, enabled=should_run)
+        output = executor.run(source, code, language, inline, enabled=should_run, use_cache="noexecute" not in flags)
+        if output is None and "execute" in flags and not self.settings.execute:
+            executor.warn(f"no cached output for {source}; rerun with --execute")
         if output is not None:
             features.output = True
             code_markup += f'<pre class="code-output"><code>{html.escape(output)}</code></pre>'
