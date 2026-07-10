@@ -21,6 +21,11 @@ from . import __version__
 from .project import BuildResult, Project
 from .settings import EXAMPLE_CONFIG, EXAMPLE_JSON, MathSettings, Settings, find_config, load_settings, normal_path
 
+PAGE_CSS = (
+    "page-base.css", "feature-code.css", "feature-math.css",
+    "feature-toc.css", "feature-image.css", "feature-warning.css",
+)
+
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
@@ -285,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.example_template is not None:
         return _write_example(_resource("default_templates/page.html"), args.example_template, args.force)
     if args.example_css is not None:
-        return _write_example(_resource("assets/page.css"), args.example_css, args.force)
+        return _write_example("\n".join(_resource(f"assets/{name}") for name in PAGE_CSS), args.example_css, args.force)
     try:
         settings = settings_from_args(args)
         if args.serve or args.watch:

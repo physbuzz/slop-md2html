@@ -43,10 +43,9 @@ def main() -> int:
         "hash guard precedes styles": text.find("data-hash-pending") < text.find('rel="stylesheet"'),
         "CHTML styles precede site script": text.find("mathjax-chtml.css") < text.find("site.js"),
         "site script is deferred": '<script defer src="/js/site.js"></script>' in text,
-        "reader CSS avoids :has()": ":has(" not in site_css,
+        "reader :has() selectors stay bounded": site_css.count(":has(") == 8 and site_css.count("body:has(#reader-") == 8,
         "text-size control present": text.count('name="reader-text"') == 3,
-        "controls are progressive enhancement": 'classList.add("js")' in text and "html.js .reader-widget" in site_css,
-        "reader widget hidden without JavaScript": bool(re.search(r"\.reader-widget\s*\{[^}]*display:\s*none", site_css, re.DOTALL)),
+        "reader widget is native HTML": '<details class="reader-widget">' in text and '<form aria-label="Reader controls">' in text,
         "content visible without JavaScript": not re.search(r"<html\b[^>]*(?:data-hash-pending|class=[\"'][^\"']*js)", text),
     }
     print(f"HTML       {page_raw:>7} raw  {page_gzip:>6} gzip")

@@ -45,6 +45,8 @@ DIRECTIVE = re.compile(r"^[ \t]*@(include|src)\(([^)]*)\)[ \t]*$", re.MULTILINE)
 MALFORMED_SRC = re.compile(r"^[ \t]*@src\([^\n)]*$", re.MULTILINE)
 TOC = re.compile(r"^[ \t]*@toc[ \t]*$", re.MULTILINE)
 HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
+EXERCISE = re.compile(r"^exercise\b", re.IGNORECASE)
+ADJACENT_BLOCKQUOTES = re.compile(r"</blockquote>\s*<blockquote>")
 ALIGN = re.compile(r"\\begin\{(align\*?|gather\*?|multline\*?|equation\*?)\}.*?\\end\{\1\}", re.DOTALL)
 
 LANGUAGE_ALIASES = {"wl": "mathematica", "mma": "mathematica", "rkt": "racket", "py": "python", "js": "javascript"}
@@ -120,6 +122,19 @@ class HeadingRenderer(mistune.HTMLRenderer):
         self.seen[base] = count + 1
         identifier = base if count == 0 else f"{base}-{count + 1}"
         return f'<h{level} id="{identifier}">{text}</h{level}>\n'
+
+
+@dataclass(frozen=True)
+class TocHeading:
+    level: int
+    label: str
+    identifier: str
+
+
+@dataclass
+class TocNode:
+    heading: TocHeading
+    children: list["TocNode"] = field(default_factory=list)
 
 
 @dataclass
@@ -400,6 +415,7 @@ class ContentRenderer:
             output = md(body)
         else:
             output = body
+        output = ADJACENT_BLOCKQUOTES.sub("", output)
         output = stash.restore(output)
         features.images = bool(re.search(r"<img\b", output, re.IGNORECASE))
         features.warning = 'class="warning"' in output
@@ -540,19 +556,52 @@ class ContentRenderer:
 
     @staticmethod
     def _toc(body: str) -> str:
-        rows: list[str] = []
+        headings: list[TocHeading] = []
         seen: dict[str, int] = {}
         for match in HEADING.finditer(body):
             level = len(match.group(1))
-            if level == 1:
+            label = html.unescape(re.sub(r"<[^>]+>|[*_`~]", "", match.group(2))).strip()
+            label = re.sub(r"!?\[([^]]+)]\([^)]*\)", r"\1", label)
+            if not label or label.lower() == "solution":
                 continue
-            label = re.sub(r"<[^>]+>|[*_`]", "", match.group(2)).strip()
             base = slugify(label)
             count = seen.get(base, 0)
             seen[base] = count + 1
             identifier = base if count == 0 else f"{base}-{count + 1}"
-            rows.append(f'<li class="toc-level-{level}"><a href="#{identifier}">{html.escape(label)}</a></li>')
-        return '<nav class="toc" aria-label="Table of contents"><ol>' + "".join(rows) + "</ol></nav>"
+            headings.append(TocHeading(level, label, identifier))
+        exercises = [heading for heading in headings if EXERCISE.match(heading.label)]
+        exercise_ids = {heading.identifier for heading in exercises}
+        roots: list[TocNode] = []
+        stack: list[tuple[int, list[TocNode]]] = [(0, roots)]
+        for heading in (heading for heading in headings if heading.identifier not in exercise_ids):
+            while heading.level <= stack[-1][0]:
+                stack.pop()
+            node = TocNode(heading)
+            stack[-1][1].append(node)
+            stack.append((heading.level, node.children))
+
+        def link(heading: TocHeading, class_name: str = "") -> str:
+            attribute = f' class="{class_name}"' if class_name else ""
+            return f'<a href="#{heading.identifier}"{attribute}>{html.escape(heading.label)}</a>'
+
+        lines = ['<div class="table-of-contents">', "<h2>Directory</h2>"]
+
+        def render(nodes: list[TocNode], root: bool = False) -> None:
+            lines.append('<ul class="toc-list">' if root else "<ul>")
+            for node in nodes:
+                heading = node.heading
+                lines.append(f'<li>{link(heading, "toc-exercises")}' if heading.label.lower() == "exercises" else f"<li>{link(heading)}")
+                if heading.label.lower() == "exercises" and exercises:
+                    items = "\n".join(f"<span>{link(item)}</span>" for item in exercises)
+                    lines.append(f'<div class="exercise-container">(<span class="exercise-list">\n{items}\n</span>)\n</div>')
+                if node.children:
+                    render(node.children)
+                lines.append("</li>")
+            lines.append("</ul>")
+
+        render(roots, True)
+        lines.append("</div>")
+        return "\n".join(lines)
 
 
 def make_liquid(template_dirs: Iterable[Path], site: dict[str, Any]) -> Environment:

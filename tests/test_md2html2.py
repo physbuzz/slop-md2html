@@ -43,10 +43,11 @@ def test_single_file_writes_only_sibling_html(tmp_path: Path):
     assert "<title>article.md</title>" in output
     assert "<h1 id=\"a-useful-title\">" in output
     assert "tex-mml-chtml.js" not in output
-    assert "Measure" in output and "reader-width" in output and "reader-type" in output
-    assert "Text" in output and "reader-text" in output
-    assert ":has(" not in output
-    assert ".reader-controls{display:none}.js .reader-controls{display:block}" in output
+    assert "Measure" in output and 'name="width"' in output and 'name="type"' in output
+    assert "Text" in output and 'name="text"' in output
+    assert output.count(":has(") == 8
+    assert '<details class="reader-widget">' in output and '<form aria-label="reader controls">' in output
+    assert "border-radius: 4px" in output and ".reader-widget form" in output
 
 
 def test_frontmatter_title_and_yaml_types(tmp_path: Path):
@@ -116,7 +117,25 @@ def test_directives_resolve_from_including_file_and_make_toc(tmp_path: Path):
     assert '<a href="#included">Included</a>' in output
     assert "print" in output and "hello" in output
     assert '<details class="source">' in output
-    assert ".toc{margin:1.25rem 0;padding:.75rem .9rem" in output
+    assert '<div class="table-of-contents">' in output
+
+
+def test_toc_compacts_exercises_like_the_original_page(tmp_path: Path):
+    output = build_one(
+        tmp_path,
+        "# Book\n\n@toc\n\n## Exercises\n\n### Exercise 1.1\n\n#### Solution\n\n### Exercise 1.2\n",
+    )
+    assert '<ul class="toc-list">' in output
+    assert 'class="toc-exercises"' in output
+    assert output.count('class="exercise-list"') == 1
+    assert "Exercise 1.1</a></span>" in output and "Exercise 1.2</a></span>" in output
+    assert '>Solution</a>' not in output
+
+
+def test_adjacent_blockquotes_match_kramdown(tmp_path: Path):
+    output = build_one(tmp_path, "> First note.\n\n> Second note.\n")
+    assert output.count("<blockquote>") == 1
+    assert output.count("<p>") == 2
 
 
 def test_highlighted_code_uses_one_box(tmp_path: Path):
@@ -130,7 +149,8 @@ def test_obsidian_images_and_embedded_video_are_responsive(tmp_path: Path):
     assert '<img class="obsidian-image" src="diagram one.png" alt="diagram one">' in output
     assert ".obsidian-image{display:block;margin:1rem auto}" in output
     video = build_one(tmp_path, '<iframe src="https://www.youtube.com/embed/example"></iframe>\n')
-    assert 'iframe[src*="youtube.com"]' in video and "aspect-ratio:16/9" in video
+    assert 'iframe[src*="youtube.com"]' in video
+    assert "aspect-ratio:16/9" in video.replace(" ", "")
 
 
 def test_page_dependencies_follow_includes_templates_and_css_but_not_source_internals(tmp_path: Path):
@@ -592,7 +612,12 @@ def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFix
     assert main(["--example-json"]) == 0
     assert (tmp_path / "md2html.json").read_text().startswith("{")
     assert main(["--example-template", "-"]) == 0
-    assert "<!doctype html>" in capsys.readouterr().out
+    assert "<!doctype html>" in capsys.readouterr().out.lower()
+    assert main(["--example-css"]) == 0
+    example_css = (tmp_path / "templates/page.css").read_text()
+    assert ".reader-widget form" in example_css
+    assert ".table-of-contents" in example_css
+    assert ".source>pre.highlight" in example_css
 
 
 def test_help_and_readme_explain_watch_serve_and_examples(capsys: pytest.CaptureFixture[str]):
