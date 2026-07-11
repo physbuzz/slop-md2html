@@ -104,6 +104,7 @@ class Project:
         self.renderer = ContentRenderer(settings, self.liquid)
         self.math_fonts: set[str] = set()
         self.shared_dependencies: set[Path] = set()
+        self.post_sources: set[Path] = set()
 
     def build(self, only: set[Path] | None = None, *, skip_unchanged: bool = False) -> BuildResult:
         self._validate_paths()
@@ -113,9 +114,8 @@ class Project:
         wanted = None if only is None else {path.absolute() for path in only}
         selected = pages if wanted is None else [page for page in pages if page.source.absolute() in wanted]
         if skip_unchanged and self.settings.shared_math_assets and any(
-            self.settings.force or not self._target(page).is_file()
-            or self._target(page).stat().st_mtime_ns < page.source.stat().st_mtime_ns
-            for page in selected
+            self.settings.force or not self._current(self._target(page, output), page, paginator)
+            for page in selected for output, _, paginator in self._page_outputs(page)
         ):
             skip_unchanged = False
         if only is None and self.settings.clean and self.settings.output_mode == "site" and self.settings.output.exists():
@@ -123,43 +123,44 @@ class Project:
         if self.settings.shared_assets and self.settings.output_mode == "pages":
             self._write_shared_css(result)
         for page in selected:
-            target = self._target(page)
-            if page.source.absolute() == target.absolute():
-                result.warnings.append(f"skipping {page.source}: source and output are the same file")
-                continue
-            if skip_unchanged and not self.settings.force and target.is_file() and target.stat().st_mtime_ns >= page.source.stat().st_mtime_ns:
-                result.skipped.append(target)
-                result.page_dependencies[page.source] = {page.source, *self.shared_dependencies}
-                continue
-            rendered = self._render_page(page)
-            shared_math = self.settings.output_mode == "site" or (self.settings.shared_assets and self.settings.input.is_dir())
-            if shared_math and rendered.features.math_css:
-                stylesheet, fonts = self._write_math_assets(rendered.features, result, target)
-                tags = [
-                    *(f'  <link rel="preload" href="{font}" as="font" type="font/woff2" crossorigin>' for font in fonts),
-                    f'  <link rel="stylesheet" href="{stylesheet}">',
-                ]
-                assets = "\n".join(tags) + "\n"
-                head_end = rendered.html.find("</head>")
-                head = rendered.html[:head_end] if head_end >= 0 else rendered.html
-                external_script = re.search(r"<script\b[^>]*\bsrc\s*=", head, re.IGNORECASE)
-                if external_script:
-                    line_start = rendered.html.rfind("\n", 0, external_script.start()) + 1
-                    insertion = line_start if rendered.html[line_start:external_script.start()].isspace() else external_script.start()
-                    rendered.html = rendered.html[:insertion] + assets + rendered.html[insertion:]
-                elif head_end >= 0:
-                    rendered.html = rendered.html[:head_end] + assets + rendered.html[head_end:]
-                else:
-                    rendered.html = assets + rendered.html
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(rendered.html, encoding="utf-8")
-            if self.settings.input.is_file():
-                self._copy_page_assets(target, rendered, result)
-            if rendered.executor:
-                rendered.executor.finish()
-            result.written.append(target)
-            result.warnings.extend(rendered.warnings)
-            result.page_dependencies[page.source] = rendered.dependencies
+            for output_relative, url, paginator in self._page_outputs(page):
+                target = self._target(page, output_relative)
+                if page.source.absolute() == target.absolute():
+                    result.warnings.append(f"skipping {page.source}: source and output are the same file")
+                    continue
+                if skip_unchanged and not self.settings.force and self._current(target, page, paginator):
+                    result.skipped.append(target)
+                    result.page_dependencies.setdefault(page.source, set()).update(self._content_sources(page, paginator) | self.shared_dependencies)
+                    continue
+                rendered = self._render_page(page, output_relative, url, paginator)
+                shared_math = self.settings.output_mode == "site" or (self.settings.shared_assets and self.settings.input.is_dir())
+                if shared_math and rendered.features.math_css:
+                    stylesheet, fonts = self._write_math_assets(rendered.features, result, target)
+                    tags = [
+                        *(f'  <link rel="preload" href="{font}" as="font" type="font/woff2" crossorigin>' for font in fonts),
+                        f'  <link rel="stylesheet" href="{stylesheet}">',
+                    ]
+                    assets = "\n".join(tags) + "\n"
+                    head_end = rendered.html.find("</head>")
+                    head = rendered.html[:head_end] if head_end >= 0 else rendered.html
+                    external_script = re.search(r"<script\b[^>]*\bsrc\s*=", head, re.IGNORECASE)
+                    if external_script:
+                        line_start = rendered.html.rfind("\n", 0, external_script.start()) + 1
+                        insertion = line_start if rendered.html[line_start:external_script.start()].isspace() else external_script.start()
+                        rendered.html = rendered.html[:insertion] + assets + rendered.html[insertion:]
+                    elif head_end >= 0:
+                        rendered.html = rendered.html[:head_end] + assets + rendered.html[head_end:]
+                    else:
+                        rendered.html = assets + rendered.html
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(rendered.html, encoding="utf-8")
+                if self.settings.input.is_file():
+                    self._copy_page_assets(target, rendered, result)
+                if rendered.executor:
+                    rendered.executor.finish()
+                result.written.append(target)
+                result.warnings.extend(rendered.warnings)
+                result.page_dependencies.setdefault(page.source, set()).update(rendered.dependencies)
         if only is None and not result.skipped and (self.settings.output_mode == "site" or self.settings.shared_assets):
             self._prune_math_assets()
         if only is None and self.settings.input.is_dir():
@@ -242,17 +243,21 @@ class Project:
             url = pattern.replace(":year", year).replace(":month", month).replace(":day", day).replace(":title", slugify(slug))
         else:
             normal = page_output(relative)
-            url = "/" + normal.as_posix()
+            if normal.name == "index.html":
+                url = "/" if normal.parent == Path(".") else f"/{normal.parent.as_posix()}/"
+            else:
+                url = "/" + normal.as_posix()
         if not url.startswith("/"):
             url = "/" + url
-        if url.endswith("/"):
-            output = Path(url.lstrip("/")) / "index.html"
-        else:
-            output = Path(url.lstrip("/"))
-        return url, output
+        return url, self._url_output(url)
+
+    @staticmethod
+    def _url_output(url: str) -> Path:
+        return Path(url.lstrip("/")) / "index.html" if url.endswith("/") else Path(url.lstrip("/"))
 
     def _populate_site(self, pages: list[Page]) -> None:
         post_pages = [page for page in pages if page.relative.parts and page.relative.parts[0] == "_posts"]
+        self.post_sources = {page.source for page in post_pages}
         post_pages.sort(key=lambda page: self._date(page), reverse=True)
         post_data = [page.data() for page in post_pages]
         self.site["posts"] = post_data
@@ -296,20 +301,66 @@ class Project:
         match = re.match(r"(\d{4})-(\d{2})-(\d{2})-", page.source.name)
         return datetime(*map(int, match.groups()), tzinfo=timezone.utc) if match else datetime.fromtimestamp(page.source.stat().st_mtime, timezone.utc)
 
-    def _render_page(self, page: Page) -> Rendered:
+    def _page_outputs(self, page: Page) -> list[tuple[Path, str, dict[str, Any] | None]]:
+        if self.settings.output_mode != "site" or page.relative.name != "index.html":
+            return [(page.output_relative, page.url, None)]
+        per_page = int(self.site.get("paginate") or 0)
+        if per_page <= 0:
+            return [(page.output_relative, page.url, None)]
+        path = str(self.site.get("paginate_path") or "/page:num/")
+        if ":num" not in path:
+            raise ValueError("paginate_path must contain :num")
+        posts = [post for post in self.site["posts"] if not post.get("hidden")]
+        total_pages = max(1, (len(posts) + per_page - 1) // per_page)
+
+        def page_path(number: int) -> str:
+            value = page.url if number == 1 else path.replace(":num", str(number))
+            return value if value.startswith("/") else "/" + value
+
+        outputs = []
+        for number in range(1, total_pages + 1):
+            url = page_path(number)
+            paginator = {
+                "page": number, "per_page": per_page,
+                "posts": posts[(number - 1) * per_page:number * per_page],
+                "total_posts": len(posts), "total_pages": total_pages,
+                "previous_page": number - 1 or None,
+                "previous_page_path": page_path(number - 1) if number > 1 else None,
+                "next_page": number + 1 if number < total_pages else None,
+                "next_page_path": page_path(number + 1) if number < total_pages else None,
+            }
+            outputs.append((page.output_relative if number == 1 else self._url_output(url), url, paginator))
+        return outputs
+
+    def _content_sources(self, page: Page, paginator: dict[str, Any] | None) -> set[Path]:
+        sources = {page.source}
+        if paginator is not None:
+            sources.update(self.post_sources)
+        return sources
+
+    def _current(self, target: Path, page: Page, paginator: dict[str, Any] | None) -> bool:
+        if not target.is_file():
+            return False
+        modified = target.stat().st_mtime_ns
+        return all(modified >= source.stat().st_mtime_ns for source in self._content_sources(page, paginator))
+
+    def _render_page(self, page: Page, output_relative: Path, url: str, paginator: dict[str, Any] | None) -> Rendered:
         self.loader.dependencies.clear()
         page_data = page.data()
+        page_data["url"] = url
         context = {"site": self.site, "page": page_data}
+        if paginator is not None:
+            context["paginator"] = paginator
         parse_liquid = self.settings.parse_liquid and page.metadata.get("parse_liquid", True) is not False
         markdown = page.source.suffix.lower() in MARKDOWN_SUFFIXES
         rendered = (
-            self.renderer.render(page.source, page.body, context, cache_page=page.output_relative, parse_liquid=parse_liquid)
+            self.renderer.render(page.source, page.body, context, cache_page=output_relative, parse_liquid=parse_liquid)
             if markdown else self.renderer.render_liquid(page.source, page.body, context, parse_liquid=parse_liquid)
         )
         page_data["title"] = rendered.title
         page.metadata["title"] = rendered.title
         if self.settings.output_mode == "site":
-            content = self._apply_layouts(rendered.html, page_data, page.source, rendered)
+            content = self._apply_layouts(rendered.html, page.source, rendered, context)
         elif markdown:
             content = self._page_template(rendered, page_data, self._target(page))
         else:
@@ -317,6 +368,7 @@ class Project:
         rendered.html = content.rstrip() + "\n"
         rendered.dependencies.update(self.loader.dependencies)
         rendered.dependencies.update(self.shared_dependencies)
+        rendered.dependencies.update(self._content_sources(page, paginator))
         for pattern in (STYLESHEET, MEDIA_ASSET):
             for href in pattern.findall(rendered.html):
                 name = href.split("?", 1)[0].split("#", 1)[0]
@@ -346,7 +398,8 @@ class Project:
                     directory.rmdir()
             with suppress(OSError):
                 root.rmdir()
-    def _apply_layouts(self, content: str, page: dict[str, Any], source: Path, rendered: Rendered) -> str:
+    def _apply_layouts(self, content: str, source: Path, rendered: Rendered, context: dict[str, Any]) -> str:
+        page = context["page"]
         layout_name = page.get("layout")
         seen: set[str] = set()
         while layout_name:
@@ -363,7 +416,7 @@ class Project:
             rendered.dependencies.add(path)
             metadata, template = parse_frontmatter(path.read_text(encoding="utf-8"))
             try:
-                content = self.liquid.from_string(liquid_source(template)).render(site=self.site, page=page, content=content, layout=metadata)
+                content = self.liquid.from_string(liquid_source(template)).render(**context, content=content, layout=metadata)
             except LiquidError as error:
                 rendered.warnings.append(f"layout failed for {source}: {error}")
                 content += f'<aside class="warning">Layout cycle or error: {html.escape(str(error))}</aside>'
@@ -575,10 +628,10 @@ class Project:
                 if path.name not in keep:
                     path.unlink()
 
-    def _target(self, page: Page) -> Path:
+    def _target(self, page: Page, output_relative: Path | None = None) -> Path:
         if self.settings.input.is_file():
             return self.settings.output
-        return self.settings.output / page.output_relative
+        return self.settings.output / (output_relative or page.output_relative)
 
     def _output_root(self) -> Path:
         return self.settings.output if self.settings.input.is_dir() else self.settings.output.parent

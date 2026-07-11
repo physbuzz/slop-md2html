@@ -181,6 +181,8 @@ building independent pages.
   "recursive": true,
   "clean": false,
   "exclude": ["drafts"],
+  "paginate": 10,
+  "paginate_path": "/page:num/",
 
   "templates": "templates",
   "template": "page.html",
@@ -227,6 +229,8 @@ building independent pages.
 | `shared_assets` | Write common page CSS to `assets/md2html/page.css`. Directory page builds enable this by default. |
 | `clean` | Remove the output directory before a complete site build. |
 | `exclude` | Skip matching source paths. Exact paths, directory prefixes, and path patterns are accepted. |
+| `paginate` | Put this many posts on each paginated `index.html` page in site mode. |
+| `paginate_path` | Set the generated page URL. It must contain `:num`; the default is `/page:num/`. |
 
 ### Templates And Styles
 
@@ -797,6 +801,29 @@ tags, and categories through `page`.
 
 `relative_url` adds `site.baseurl` to a path. `absolute_url` adds both
 `site.url` and `site.baseurl`. `site.time` contains the build time.
+
+### Pagination
+
+Set `paginate` to the number of posts on each page. Set `paginate_path` to the
+URL for pages after the first:
+
+```json
+{
+  "output_mode": "site",
+  "paginate": 5,
+  "paginate_path": "/blog/page:num/"
+}
+```
+
+Pagination applies to HTML files named `index.html`. The first page keeps the
+index page's URL and output path. Later pages replace `:num` with page numbers
+beginning at 2. Markdown index files are not pagination templates.
+
+The index page and its layouts receive `paginator`. Use `paginator.posts` for
+the posts on the current page. The other fields are `page`, `per_page`,
+`total_posts`, `total_pages`, `previous_page`, `previous_page_path`,
+`next_page`, and `next_page_path`. A missing previous or next page has a Liquid
+`nil` value. Posts with `hidden: true` do not appear in `paginator.posts`.
 
 Site mode writes a small `feed.xml` containing the twenty newest posts. Add a
 source `feed.xml` to replace it with a custom Liquid feed. md2html renders that

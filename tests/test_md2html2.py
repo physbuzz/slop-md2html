@@ -525,6 +525,84 @@ def test_native_site_model_layouts_includes_assets_and_dated_urls(tmp_path: Path
     assert not result.warnings
 
 
+def test_site_pagination_builds_jekyll_paginator_pages(tmp_path: Path):
+    source = tmp_path / "site"
+    output = tmp_path / "public"
+    (source / "_layouts").mkdir(parents=True)
+    (source / "_posts").mkdir()
+    (source / "_layouts" / "default.html").write_text(
+        "layout-page={{ paginator.page }} page-url={{ page.url }} | {{ content }}",
+    )
+    (source / "index.html").write_text(
+        """---
+layout: default
+---
+page={{ paginator.page }} per={{ paginator.per_page }} total={{ paginator.total_posts }} pages={{ paginator.total_pages }}
+previous={{ paginator.previous_page }} previous-path={{ paginator.previous_page_path }}
+next={{ paginator.next_page }} next-path={{ paginator.next_page_path }} site-posts={{ site.posts | size }}
+{% for post in paginator.posts %}{{ post.title }}|{% endfor %}
+""",
+    )
+    for day, title, hidden in [
+        ("05", "Hidden", True), ("04", "Four", False), ("03", "Three", False),
+        ("02", "Two", False), ("01", "One", False),
+    ]:
+        (source / "_posts" / f"2026-01-{day}-{title.lower()}.md").write_text(
+            f"---\ntitle: {title}\nhidden: {str(hidden).lower()}\n---\n{title}\n",
+        )
+    (source / "md2html.json").write_text(
+        '{"input":".","output":"../public","output_mode":"site",'
+        '"paginate":2,"paginate_path":"/notes/page:num/"}',
+    )
+    settings = load_settings(source / "md2html.json")
+
+    result = Project(settings).build()
+
+    first = (output / "index.html").read_text()
+    second = (output / "notes/page2/index.html").read_text()
+    assert "layout-page=1 page-url=/" in first
+    assert "page=1 per=2 total=4 pages=2" in first
+    assert "previous= previous-path=" in first
+    assert "next=2 next-path=/notes/page2/ site-posts=5" in first
+    assert "Four|Three|" in first and "Two|" not in first and "Hidden|" not in first
+    assert "layout-page=2 page-url=/notes/page2/" in second
+    assert "previous=1 previous-path=/" in second
+    assert "next= next-path=" in second
+    assert "Two|One|" in second and "Four|" not in second
+    assert output / "notes/page2/index.html" in result.written
+    assert source / "_posts/2026-01-01-one.md" in result.page_dependencies[source / "index.html"]
+
+    unchanged = Project(settings).build(skip_unchanged=True)
+    assert output / "index.html" in unchanged.skipped
+    assert output / "notes/page2/index.html" in unchanged.skipped
+    post = source / "_posts/2026-01-01-one.md"
+    post.write_text(post.read_text() + "changed\n")
+    modified = max((output / "index.html").stat().st_mtime_ns, (output / "notes/page2/index.html").stat().st_mtime_ns) + 1
+    os.utime(post, ns=(modified, modified))
+    rebuilt = Project(settings).build(skip_unchanged=True)
+    assert output / "index.html" in rebuilt.written
+    assert output / "notes/page2/index.html" in rebuilt.written
+
+
+def test_pagination_requires_an_html_index_and_numbered_path(tmp_path: Path):
+    source = tmp_path / "site"
+    output = tmp_path / "public"
+    (source / "_posts").mkdir(parents=True)
+    (source / "_posts/2026-01-01-post.md").write_text("---\ntitle: Post\n---\nPost\n")
+    (source / "index.md").write_text("{{ paginator.page }}")
+    settings = Settings(
+        input=source, output=output, output_mode="site", project_root=source,
+        recursive=True, site_data={"paginate": 1, "paginate_path": "/pages/"},
+    )
+    Project(settings).build()
+    assert not (output / "pages/index.html").exists()
+
+    (source / "index.md").unlink()
+    (source / "index.html").write_text("{{ paginator.page }}")
+    with pytest.raises(ValueError, match="paginate_path must contain :num"):
+        Project(settings).build()
+
+
 def test_liquid_only_pages_preserve_suffix_and_special_syntax(tmp_path: Path):
     source = tmp_path / "site"
     output = tmp_path / "public"

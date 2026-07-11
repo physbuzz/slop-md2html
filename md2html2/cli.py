@@ -61,7 +61,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-w", "--watch", action="store_true", help="rebuild when source files change without starting a server")
     result.add_argument("--port", type=int, default=8000, help="preview server port (default: 8000)")
     result.add_argument("--config", type=Path, help="JSON configuration file; relative paths inside it are resolved from that file")
-    result.add_argument("--output-mode", choices=("pages", "site"), help="build independent pages or a static site")
+    result.add_argument("--output-mode", choices=("pages", "site"), help="build independent pages or a static site with layouts, posts, and pagination")
     result.add_argument("--templates", type=Path, help="directory searched before built-in templates")
     result.add_argument("--template", help="standalone HTML template name or path")
     result.add_argument("--css", action="append", help="CSS file to embed; repeat to combine files")
