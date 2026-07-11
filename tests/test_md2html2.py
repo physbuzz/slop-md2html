@@ -603,6 +603,90 @@ def test_pagination_requires_an_html_index_and_numbered_path(tmp_path: Path):
         Project(settings).build()
 
 
+def test_jekyll_mode_uses_config_conventions_and_shared_features(tmp_path: Path):
+    source = tmp_path / "site"
+    output = tmp_path / "public"
+    (source / "_layouts").mkdir(parents=True)
+    (source / "_posts").mkdir()
+    (source / "_config.yml").write_text(
+        "title: Jekyll Site\nurl: https://example.test\nbaseurl: /notes\n",
+    )
+    (source / "_layouts/default.html").write_text(
+        "<title>{{ site.title }} | {{ page.title }}</title>{{ content }}",
+    )
+    (source / "program.py").write_text("print('executed')\n")
+    post = source / "_posts/2026-07-11-feature.md"
+    post.write_text(
+        "---\nlayout: default\ntitle: Feature\ncategories: physics\ntags: Math Code\n---\n"
+        "@src(program.py, execute)\n",
+    )
+    (source / "index.html").write_text(
+        "---\nlayout: default\ntitle: Home\n---\n"
+        "{% for post in site.posts %}{{ post.url }} {{ post.tags | join: ',' }}{% endfor %}",
+    )
+    (source / "plain.md").write_text("No front matter means static Markdown.\n")
+    (source / "draft.md").write_text("---\npublished: false\n---\nNot published.\n")
+    (source / "Gemfile").write_text("excluded\n")
+    settings = Settings(
+        input=source, output=output, output_mode="jekyll", project_root=source,
+        recursive=True, execute=True,
+    )
+
+    result = Project(settings).build()
+
+    post_output = output / "physics/2026/07/11/feature.html"
+    assert "<title>Jekyll Site | Feature</title>" in post_output.read_text()
+    assert "codehilite" in post_output.read_text() and "executed" in post_output.read_text()
+    assert 'href="/notes/program.py"' in post_output.read_text()
+    assert "/physics/2026/07/11/feature.html Math,Code" in (output / "index.html").read_text()
+    assert (output / "plain.md").read_text() == "No front matter means static Markdown.\n"
+    assert not (output / "draft.html").exists()
+    assert not (output / "Gemfile").exists()
+    assert post in result.page_dependencies
+
+
+def test_jekyll_markdown_preserves_markdown_and_expands_md2html_syntax(tmp_path: Path):
+    source = tmp_path / "notes"
+    output = tmp_path / "jekyll"
+    (source / "_layouts").mkdir(parents=True)
+    (source / "_layouts/default.html").write_text("{{ content }}")
+    (source / "parts").mkdir()
+    (source / "parts/more.md").write_text("## Included\n")
+    (source / "program.py").write_text("print('markdown execution')\n")
+    (source / "image.png").write_bytes(b"image")
+    page = source / "index.md"
+    page.write_text(
+        "# Notes\n\n@toc\n\n@include(parts/more.md)\n\n@src(program.py, execute)\n\n"
+        "@src-begin(python, execute)\nprint('inline markdown')\n@src-end\n\n"
+        "```text\n@src(not-a-directive.py)\n{{ untouched_code }}\n```\n\n"
+        "Liquid stays {{ site.title }} and math stays $x^2$.\n\n![[image.png|200]]\n",
+    )
+    settings = Settings(
+        input=source, output=output, output_mode="jekyll-markdown", project_root=source,
+        recursive=True, execute=True, frontmatter={"layout": "default", "render_with_liquid": False},
+    )
+
+    result = Project(settings).build()
+
+    markdown = (output / "index.md").read_text()
+    assert markdown.startswith("---\nlayout: default\nrender_with_liquid: false\ntitle: index.md\n---")
+    assert "## Directory" in markdown and "[Included](#included)" in markdown
+    assert '<div class="codehilite"><pre>' in markdown and "markdown execution" in markdown
+    assert "inline-source" in markdown and "inline markdown" in markdown
+    assert "@src(program.py" not in markdown and "@src-begin" not in markdown and "@src-end" not in markdown
+    assert "```text\n@src(not-a-directive.py)\n{{ untouched_code }}\n```" in markdown
+    assert "Liquid stays {{ site.title }} and math stays $x^2$." in markdown
+    assert '<img class="obsidian-image" src="image.png" alt="image" style="width:200px">' in markdown
+    assert (output / "program.py").read_text() == "print('markdown execution')\n"
+    assert (output / "_layouts/default.html").read_text() == "{{ content }}"
+    assert {page, source / "parts/more.md", source / "program.py", source / "image.png"} <= result.page_dependencies[page]
+
+    cached_output = tmp_path / "cached-jekyll"
+    cached = Project(settings.with_cli(output=cached_output, execute=False)).build()
+    assert "markdown execution" in (cached_output / "index.md").read_text()
+    assert not cached.warnings
+
+
 def test_liquid_only_pages_preserve_suffix_and_special_syntax(tmp_path: Path):
     source = tmp_path / "site"
     output = tmp_path / "public"
@@ -657,9 +741,9 @@ def test_source_liquid_can_be_disabled_without_disabling_layouts(tmp_path: Path)
     (source / "_layouts").mkdir(parents=True)
     (source / "_layouts" / "default.html").write_text("<title>{{ page.title }}</title><main>{{ content }}</main>")
     (source / "off.html").write_text(
-        "---\nlayout: default\ntitle: Page title\nparse_liquid: false\n---\n{{ page.title }}",
+        "---\nlayout: default\ntitle: Page title\nrender_with_liquid: false\n---\n{{ page.title }}",
     )
-    (source / "global.md").write_text("---\ntitle: Global\nparse_liquid: true\n---\n# {{ page.title }}\n")
+    (source / "global.md").write_text("---\ntitle: Global\nrender_with_liquid: true\n---\n# {{ page.title }}\n")
     settings = Settings(
         input=source, output=output, output_mode="site", project_root=source,
         recursive=True,
@@ -746,6 +830,10 @@ def test_config_paths_are_relative_to_config(tmp_path: Path):
     assert settings.math.backend == "mathml"
     assert settings.math.chtml_fonts == "inline"
     assert settings.shared_assets
+    config.write_text('{"input":"content","output_mode":"jekyll-markdown","frontmatter":{"layout":"post"}}')
+    settings = load_settings(config)
+    assert settings.output == root / "markdown" and settings.recursive
+    assert settings.frontmatter == {"layout": "post"}
 
 
 def test_only_md2html_json_is_discovered_and_configuration_is_json(tmp_path: Path):
@@ -923,6 +1011,26 @@ def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFix
     assert main([str(source), "--templates", "templates"]) == 0
     generated = source.with_suffix(".html").read_text()
     assert '<main class="container">' in generated and "--reader-text-size" in generated
+
+
+def test_cli_selects_jekyll_modes_and_safe_defaults(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    site = Path("site")
+    site.mkdir()
+    (site / "index.md").write_text("# Page\n")
+
+    jekyll = settings_from_args(parser().parse_args(["--jekyll", str(site)]))
+    markdown = settings_from_args(parser().parse_args(["--jekyll-markdown", str(site)]))
+    assert jekyll.output_mode == "jekyll" and jekyll.output == Path("_site") and jekyll.recursive
+    assert markdown.output_mode == "jekyll-markdown" and markdown.output == Path("markdown") and markdown.recursive
+    assert main(["--jekyll-markdown", str(site), "--serve"]) == 2
+    assert "--serve requires HTML output" in capsys.readouterr().err
+
+    calls = []
+    monkeypatch.setattr("md2html2.cli.watch", lambda settings, **options: calls.append((settings[0].output_mode, options)) or 0)
+    assert main(["--jekyll", str(site), "--serve"]) == 0
+    assert main(["--jekyll-markdown", str(site), "--watch"]) == 0
+    assert calls == [("jekyll", {"serve": True, "port": 8000}), ("jekyll-markdown", {"serve": False, "port": 8000})]
 
 
 def test_help_and_readme_explain_watch_serve_and_examples(capsys: pytest.CaptureFixture[str]):

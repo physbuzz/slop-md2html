@@ -169,7 +169,7 @@ class Features:
 
 @dataclass
 class Rendered:
-    html: str
+    content: str
     title: str
     features: Features
     dependencies: set[Path] = field(default_factory=set)
@@ -345,8 +345,10 @@ class ContentRenderer:
         self.liquid = liquid
 
     def render(
-        self, source: Path, body: str, context: dict[str, Any], *, cache_page: Path, parse_liquid: bool = True,
+        self, source: Path, body: str, context: dict[str, Any], *, cache_page: Path,
+        parse_liquid: bool = True,
     ) -> Rendered:
+        output_markdown = self.settings.markdown_mode
         self._validate_source_blocks(source, body)
         stash = Stash()
         features = Features()
@@ -371,9 +373,23 @@ class ContentRenderer:
         body = RAW_HIGHLIGHT.sub(lambda match: stash.put(match.group(0), block=True), body)
         body = RAW_CODE.sub(protect_raw, body)
 
+        def protect_fence(match: re.Match[str]) -> str:
+            features.code = True
+            if output_markdown:
+                return stash.put(match.group(0), block=True)
+            language = match.group(3).strip().split(maxsplit=1)[0] if match.group(3).strip() else "text"
+            return stash.put(code_html(match.group(4), language), block=True)
+
+        body = FENCE.sub(protect_fence, body)
+        body = INLINE_CODE.sub(
+            lambda match: stash.put(match.group(0) if output_markdown else f"<code>{html.escape(match.group(2).strip())}</code>", block=False),
+            body,
+        )
+
         def protect_highlight(match: re.Match[str]) -> str:
             features.code = True
-            return stash.put(code_html(match.group(2), match.group(1)), block=True)
+            markup = match.group(0) if output_markdown else code_html(match.group(2), match.group(1))
+            return stash.put(markup, block=True)
 
         body = HIGHLIGHT.sub(protect_highlight, body)
 
@@ -384,14 +400,6 @@ class ContentRenderer:
 
         body = SRC_BLOCK.sub(inline_block, body)
         body = self._expand_directives(body, source, source, context, stash, features, dependencies, assets, warnings, executor, ())
-
-        def protect_fence(match: re.Match[str]) -> str:
-            features.code = True
-            language = match.group(3).strip().split(maxsplit=1)[0] if match.group(3).strip() else "text"
-            return stash.put(code_html(match.group(4), language), block=True)
-
-        body = FENCE.sub(protect_fence, body)
-        body = INLINE_CODE.sub(lambda m: stash.put(f"<code>{html.escape(m.group(2).strip())}</code>", block=False), body)
 
         def obsidian_image(match: re.Match[str]) -> str:
             name, attributes = self._image_parts(match.group(1))
@@ -409,24 +417,27 @@ class ContentRenderer:
             return stash.put(markup, block=True)
 
         body = OBSIDIAN_IMAGE.sub(obsidian_image, body)
-        body = self._protect_math(body, stash, features, warnings)
+        if not output_markdown:
+            body = self._protect_math(body, stash, features, warnings)
 
         if TOC.search(body):
             features.toc = True
-            toc = self._toc(body)
+            toc = self._toc(body, markdown=output_markdown)
             body = TOC.sub(stash.put(toc, block=True), body)
 
-        if parse_liquid:
+        if parse_liquid and not output_markdown:
             try:
                 body = self.liquid.from_string(liquid_source(body)).render(**context)
             except LiquidError as error:
                 warnings.append(f"template expression failed in {source}: {error}")
                 body += f'\n<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
 
-        renderer = HeadingRenderer()
-        md = mistune.create_markdown(renderer=renderer, plugins=["strikethrough", "table", "task_lists", "url"])
-        output = md(body)
-        output = ADJACENT_BLOCKQUOTES.sub("", output)
+        if output_markdown:
+            output = body
+        else:
+            renderer = HeadingRenderer()
+            md = mistune.create_markdown(renderer=renderer, plugins=["strikethrough", "table", "task_lists", "url"])
+            output = ADJACENT_BLOCKQUOTES.sub("", md(body))
         output = stash.restore(output)
         if features.math_copy:
             output += MATH_COPY_SCRIPT
@@ -508,7 +519,12 @@ class ContentRenderer:
                     value, path, page_source, context, stash, features, dependencies, assets, warnings, executor, (*stack, origin),
                 )
             language = path.suffix.lstrip(".") or "text"
-            href = (Path(name) if origin == page_source else Path(os.path.relpath(path, page_source.parent))).as_posix()
+            root = self.settings.input if self.settings.input.is_dir() else self.settings.project_root
+            if self.settings.site_mode and path.is_relative_to(root):
+                baseurl = str(context.get("site", {}).get("baseurl") or "").rstrip("/")
+                href = baseurl + "/" + path.relative_to(root).as_posix()
+            else:
+                href = (Path(name) if origin == page_source else Path(os.path.relpath(path, page_source.parent))).as_posix()
             assets[path] = Path(href)
             return self._source_box(path, value, language, flags, False, executor, stash, features, name, href)
 
@@ -628,7 +644,7 @@ class ContentRenderer:
         return ALIGN.sub(lambda match: emit(match.group(0), True), "".join(result))
 
     @staticmethod
-    def _toc(body: str) -> str:
+    def _toc(body: str, *, markdown: bool = False) -> str:
         headings: list[TocHeading] = []
         seen: dict[str, int] = {}
         for match in HEADING.finditer(body):
@@ -652,6 +668,21 @@ class ContentRenderer:
             node = TocNode(heading)
             stack[-1][1].append(node)
             stack.append((heading.level, node.children))
+
+        if markdown:
+            lines = ["## Directory"]
+
+            def render_markdown(nodes: list[TocNode], depth: int = 0) -> None:
+                for node in nodes:
+                    heading = node.heading
+                    lines.append("  " * depth + f"- [{heading.label}](#{heading.identifier})")
+                    if heading.label.lower() == "exercises" and exercises:
+                        links = ", ".join(f"[{item.label}](#{item.identifier})" for item in exercises)
+                        lines.append("  " * (depth + 1) + f"- *Exercises:* ({links})")
+                    render_markdown(node.children, depth + 1)
+
+            render_markdown(roots)
+            return "\n".join(lines)
 
         def link(heading: TocHeading, class_name: str = "") -> str:
             attribute = f' class="{class_name}"' if class_name else ""

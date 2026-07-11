@@ -1,7 +1,7 @@
 # md2html 2.0
 
-`md2html` turns Markdown notes into standalone HTML pages or a small static
-site. It's aimed at quick math notes, so on my personal computer I can do
+`md2html` turns Markdown notes into standalone HTML pages, a small static site,
+or Markdown for Jekyll to finish. It's aimed at quick math notes, so on my personal computer I can do
 `md2html notes.md && upload notes.html` and have a shareable link to a beautiful
 standalone webpage ready.
 
@@ -28,6 +28,12 @@ selected template or layout. For HTML, HTM, and XML, it reads front matter and
 renders only Liquid, followed by an explicitly selected site layout. Static-site
 builds create the page list first, so layouts can use `site.pages`, `site.posts`,
 tags, and categories.
+
+Jekyll compatibility mode uses the same renderer and site model, but reads
+`_config.yml`, requires front matter on ordinary Jekyll pages, follows Jekyll's
+default exclusions and dated URLs, and writes a complete HTML site. Jekyll
+Markdown mode runs md2html directives and executable examples, then writes the
+remaining Markdown and Liquid for Jekyll to render.
 
 Print the documentation and starter files from the installed command:
 
@@ -111,6 +117,12 @@ md2html --config md2html.json
 # Serve that site while rebuilding on change.
 md2html --config md2html.json --serve --port 4000
 
+# Build and serve an existing Jekyll source tree without Ruby Jekyll.
+md2html --jekyll website -o _site --serve
+
+# Expand md2html syntax, but leave Markdown, Liquid, and layouts for Jekyll.
+md2html --jekyll-markdown notes -o website/notes --execute
+
 # In a directory that has md2html.json, build with no arguments.
 md2html
 
@@ -137,14 +149,16 @@ overwrite its source, md2html skips that page, prints a warning, and continues
 building other pages. With several inputs and `-o public`, it preserves their
 paths relative to their common directory below `public`.
 
-`-o` and `--output` are equivalent. `--output-mode pages` builds independent
-pages; `--output-mode site` builds layouts and site data. The CLI value
-overrides `output_mode` from JSON. Use `--version` to print the installed
-version and `--help` to print all options.
+`-o` and `--output` are equivalent. `--output-mode` accepts `pages`, `site`,
+`jekyll`, and `jekyll-markdown`. `--jekyll` and `--jekyll-markdown` select the
+last two modes directly. The CLI value overrides `output_mode` from JSON. Use
+`--version` to print the installed version and `--help` to print all options.
 
-A directory input writes to `html` unless `-o` or configuration chooses another
-directory. Add `-r` to include nested Markdown. Directory builds use shared CSS
-by default. Several file inputs remain self-contained unless `-o` or
+A page directory writes to `html`, a Jekyll site writes to `_site`, and Jekyll
+Markdown writes to `markdown` unless `-o` or configuration chooses another
+directory. Add `-r` to include nested Markdown in page mode; the other modes
+are recursive by default. Page directory builds use shared CSS by default.
+Several file inputs remain self-contained unless `-o` or
 `--shared-assets` collects them below one output directory.
 Set `"shared_assets": false` in a directory configuration to embed CSS in each
 page instead.
@@ -183,6 +197,9 @@ building independent pages.
   "exclude": ["drafts"],
   "paginate": 10,
   "paginate_path": "/page:num/",
+  "frontmatter": {
+    "layout": "default"
+  },
 
   "templates": "templates",
   "template": "page.html",
@@ -223,12 +240,13 @@ building independent pages.
 | --- | --- |
 | `input` | Markdown file or source directory. The CLI also accepts several inputs. |
 | `output` | Output file for one file input, or output directory for a collection. |
-| `output_mode` | `"pages"` for independent templated pages or `"site"` for layouts, posts, and a site model. |
-| `recursive` | Read supported documents in nested directories. Site mode enables this by default. |
+| `output_mode` | Select `"pages"`, `"site"`, `"jekyll"`, or `"jekyll-markdown"`. |
+| `recursive` | Read supported documents in nested directories. Site and Jekyll modes enable this by default. |
 | `parse_liquid` | Render Liquid in source documents. Templates and layouts always use Liquid. The default is `true`. |
 | `shared_assets` | Write common page CSS to `assets/md2html/page.css`. Directory page builds enable this by default. |
 | `clean` | Remove the output directory before a complete site build. |
 | `exclude` | Skip matching source paths. Exact paths, directory prefixes, and path patterns are accepted. |
+| `frontmatter` | Add default front matter to Jekyll Markdown output. Source front matter takes precedence. |
 | `paginate` | Put this many posts on each paginated `index.html` page in site mode. |
 | `paginate_path` | Set the generated page URL. It must contain `:num`; the default is `/page:num/`. |
 
@@ -313,11 +331,12 @@ Front matter controls both independent pages and site pages:
 | `css` | Replace base CSS for this page. Use `[]` to keep only feature CSS. |
 | `stylesheets` | Add stylesheet links for this page. |
 | `feature_css` | Enable or disable generated feature CSS for this page. |
-| `parse_liquid` | Set to `false` to leave Liquid expressions in this document unchanged. Templates and layouts still render. |
+| `render_with_liquid` | Set to `false` to leave Liquid expressions in this document unchanged. Templates and layouts still render. |
 | `layout` | Select a static-site layout from `_layouts`. Layouts may select another layout. |
 | `permalink` | Set a static-site URL and output path. A trailing slash writes `index.html`. |
 | `date` | Set a post date. ISO dates and YAML date values are accepted. |
 | `tags`, `categories` | Add a post to the corresponding `site` groups. Strings and lists are accepted. |
+| `published` | Set to `false` to omit a page or post in Jekyll compatibility mode. |
 
 Source pages may use Liquid expressions such as `{{ page.title }}` and
 `{{ site.title }}`. Markdown protects raw code, fenced code, inline code, and
@@ -327,7 +346,7 @@ region explicitly.
 
 Pass `--no-liquid` or set `"parse_liquid": false` in JSON to leave Liquid
 unchanged in every source document. A page may opt out with front matter
-`parse_liquid: false`; a page cannot override a global opt-out. Templates and
+`render_with_liquid: false`; a page cannot override a global opt-out. Templates and
 layouts continue to render Liquid, so they insert the unparsed document through
 `{{ content }}` as-is. Static sites also support Liquid includes, loops,
 conditionals, and the `relative_url` and `absolute_url` filters.
@@ -719,7 +738,43 @@ uses those links to copy changes without rerendering a page. Files made by an
 executable example remain in that example's `.md2html-cache` workspace; md2html
 does not publish them automatically.
 
-## Static Site Builds
+## Jekyll Markdown Output
+
+Use `--jekyll-markdown` or set `output_mode` to `"jekyll-markdown"` to prepare
+Markdown for a later Jekyll build:
+
+```json
+{
+  "input": "notes",
+  "output": "website/notes",
+  "output_mode": "jekyll-markdown",
+  "execute": true,
+  "frontmatter": {
+    "layout": "notes",
+    "render_with_liquid": false
+  }
+}
+```
+
+This mode expands `@include`, `@toc`, `@src`, inline source blocks, and
+Obsidian images. Source directives become syntax-highlighted HTML that is valid
+inside Markdown, and cached or newly executed output is included below the
+source. Ordinary fenced code, inline code, math, raw HTML, links, and Liquid
+remain for Jekyll. Directives written inside fenced or inline code remain
+literal.
+
+The output keeps each `.md` or `.markdown` path. Source front matter overrides
+the configured `frontmatter` defaults. Pages without a title use their source
+filename. md2html writes the resulting YAML and Markdown; Jekyll performs the
+Liquid, Markdown, permalink, and layout stages.
+
+Directory builds copy the remaining source tree, including Jekyll layouts,
+includes, configuration, source files, and static assets. They omit md2html's
+configuration, cache, output, version-control data, and Python cache files.
+`--watch` updates this tree as inputs change. Use Jekyll or Jekyll compatibility
+mode to serve it; `--serve` is reserved for HTML output.
+
+## Native Static Site Builds
 
 Set `output_mode` to `"site"` in `md2html.json`:
 
@@ -767,7 +822,8 @@ _posts/2026-05-18-gaussianintegral.md
 ```
 
 Set `site.permalink` or page `permalink` to change that path. The supported
-site pattern fields are `:year`, `:month`, `:day`, and `:title`. A permalink
+site pattern fields are `:year`, `:month`, `:day`, `:title`, `:slug`, and
+`:categories`. A permalink
 ending in `/` writes `index.html` inside that directory.
 
 ### Layouts And Includes
@@ -793,11 +849,12 @@ Liquid dependencies are watched recursively.
 
 ### Site Data
 
-`site.pages` contains every discovered page. `site.posts` contains posts in
-reverse date order. `site.tags` and `site.categories` map each name to its
-posts. `site.tag_list` contains sorted objects with `name`, `slug`, and `posts`
-fields. Each page exposes its front matter, URL, source path, filename, excerpt,
-tags, and categories through `page`.
+`site.pages` contains every discovered page in native site mode; Jekyll mode
+keeps posts in `site.posts` instead. Posts are in reverse date order.
+`site.tags` and `site.categories` map each name to its posts. `site.tag_list`
+and `site.category_list` contain sorted objects with `name`, `slug`, `posts`,
+and `size` fields. Each page exposes its front matter, URL, source path,
+filename, excerpt, tags, and categories through `page`.
 
 `relative_url` adds `site.baseurl` to a path. `absolute_url` adds both
 `site.url` and `site.baseurl`. `site.time` contains the build time.
@@ -825,17 +882,50 @@ the posts on the current page. The other fields are `page`, `per_page`,
 `next_page`, and `next_page_path`. A missing previous or next page has a Liquid
 `nil` value. Posts with `hidden: true` do not appear in `paginator.posts`.
 
-Site mode writes a small `feed.xml` containing the twenty newest posts. Add a
+HTML site modes write a small `feed.xml` containing the twenty newest posts. Add a
 source `feed.xml` to replace it with a custom Liquid feed. md2html renders that
 file as XML and does not generate or overwrite it with the fallback feed.
 
-### Static Files And Exclusions
+## Jekyll Compatibility Mode
+
+Use `--jekyll` or set `output_mode` to `"jekyll"` to build a Jekyll source tree
+directly:
+
+```bash
+md2html --jekyll website -o _site
+md2html --jekyll website -o _site --serve
+```
+
+This mode reads `_config.yml` and uses the existing site discovery, content
+renderer, layouts, includes, Liquid environment, pagination, feed, execution
+cache, dependency graph, watcher, and server. Markdown pages still support all
+md2html directives and executable source examples. HTML and HTM pages use
+Liquid without an added Markdown pass.
+
+Ordinary Jekyll pages require YAML front matter; supported files without it are
+copied unchanged. Dated files in `_posts` become posts. The default post URL is
+`/:categories/:year/:month/:day/:title.html`, while `_config.yml` or page
+permalinks may replace it. Tags and categories are normalized to lists.
+`site.posts`, `site.pages`, `site.tags`, `site.categories`, pagination fields,
+and common URL filters are available to Liquid.
+
+Jekyll's standard cache, package, `_site`, and vendored dependency paths are
+excluded. `_config.yml` `include` and `exclude` entries are honored. Local
+`_layouts` and `_includes` are used; Ruby plugins and theme-provided templates
+or assets are not executed. A local `feed.xml` is rendered when present;
+otherwise md2html writes its small Atom feed.
+
+The compatibility subset does not implement custom collections, `_data`,
+front-matter defaults, Sass conversion, or plugin generators.
+
+## Static Files And Exclusions
 
 Directory builds copy static files while preserving their relative paths.
-They do not copy Markdown sources, `md2html.json`, files or directories whose
-names begin with `.` or `_`, or sources under `_layouts`, `_includes`, and
-`_posts`. Supported page documents are rendered instead. The configured
-`exclude` entries are also skipped.
+HTML builds render discovered page sources and do not copy `md2html.json`,
+private paths, layouts, includes, or post sources. In native site mode every
+supported document is a page. In Jekyll mode ordinary supported documents
+without front matter remain static files and are copied unchanged. Configured
+exclusions are also skipped.
 
 An output directory below the source tree is excluded from discovery and
 copying, so `md2html -r . -o html` does not read `html` again. The build rejects

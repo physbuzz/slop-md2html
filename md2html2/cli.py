@@ -23,7 +23,7 @@ from pygments.util import ClassNotFound
 
 from . import __version__
 from .project import BuildResult, Project, syntax_css
-from .settings import EXAMPLE_CONFIG, Settings, find_config, load_settings, normal_path, page_output
+from .settings import EXAMPLE_CONFIG, OUTPUT_MODES, Settings, default_output, find_config, load_settings, normal_path, page_output
 
 PAGE_CSS = (
     "page-base.css", "feature-code.css", "feature-math.css",
@@ -42,12 +42,14 @@ def _pygments_style(name: str) -> str:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="md2html",
-        description="Build standalone HTML pages or a static site.",
+        description="Build standalone pages, a static site, or Jekyll input.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
   md2html article.md
   md2html -es article.md
   md2html -erf notes -o html
+  md2html --jekyll website --serve
+  md2html --jekyll-markdown notes -o website/notes
   md2html --config md2html.json --serve
   md2html --example-template templates/page.html
 """,
@@ -61,7 +63,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-w", "--watch", action="store_true", help="rebuild when source files change without starting a server")
     result.add_argument("--port", type=int, default=8000, help="preview server port (default: 8000)")
     result.add_argument("--config", type=Path, help="JSON configuration file; relative paths inside it are resolved from that file")
-    result.add_argument("--output-mode", choices=("pages", "site"), help="build independent pages or a static site with layouts, posts, and pagination")
+    result.add_argument("--output-mode", choices=OUTPUT_MODES, help="build pages, a native site, a Jekyll site, or Jekyll Markdown")
+    result.add_argument("--jekyll", action="store_const", const="jekyll", dest="output_mode", help="build a Jekyll-compatible site")
+    result.add_argument("--jekyll-markdown", action="store_const", const="jekyll-markdown", dest="output_mode", help="write Markdown for Jekyll to finish")
     result.add_argument("--templates", type=Path, help="directory searched before built-in templates")
     result.add_argument("--template", help="standalone HTML template name or path")
     result.add_argument("--css", action="append", help="CSS file to embed; repeat to combine files")
@@ -162,13 +166,17 @@ def settings_list_from_args(args: argparse.Namespace) -> list[Settings]:
     elif len(inputs) == 1:
         source = inputs[0]
         if source.is_file():
-            output = normal_path(args.output) if args.output else None
+            output = normal_path(args.output) if args.output else (Path("markdown") / source.name if args.output_mode == "jekyll-markdown" else None)
             if output and output.is_dir():
                 output = output / page_output(source).name
             return [_apply_cli(Settings.single(source, output), args)]
         else:
-            output = normal_path(args.output or Path("html"))
-            return [_apply_cli(Settings(input=source, output=output, project_root=source, recursive=args.recursive, shared_assets=True), args)]
+            mode = args.output_mode or "pages"
+            output = normal_path(args.output or default_output(mode))
+            return [_apply_cli(Settings(
+                input=source, output=output, output_mode=mode, project_root=source,
+                recursive=args.recursive or mode != "pages", shared_assets=mode == "pages",
+            ), args)]
 
     if not inputs:
         raise ValueError("configuration has no input")
@@ -176,18 +184,19 @@ def settings_list_from_args(args: argparse.Namespace) -> list[Settings]:
     if config:
         base = replace(base, project_root=root)
     else:
-        base = Settings(input=inputs[0], output=Path("html"), project_root=root)
-    shared = args.shared_assets or any(path.is_dir() for path in inputs)
-    collection = len(inputs) > 1 and (args.output is not None or shared)
-    output_root = normal_path(args.output or (base.output if config else Path("html")))
+        mode = args.output_mode or "pages"
+        base = Settings(input=inputs[0], output=default_output(mode), output_mode=mode, project_root=root)
+    shared = args.shared_assets or (base.output_mode == "pages" and any(path.is_dir() for path in inputs))
+    collection = len(inputs) > 1 and (args.output is not None or shared or base.markdown_mode)
+    output_root = normal_path(args.output or base.output)
     common = _common_root(inputs)
     planned: list[Settings] = []
     for source in inputs:
         if collection:
             relative = source.absolute().relative_to(common.absolute())
-            output = output_root / (page_output(relative) if source.is_file() else relative)
+            output = output_root / (relative if base.markdown_mode else page_output(relative) if source.is_file() else relative)
         else:
-            output = page_output(source)
+            output = source if base.markdown_mode else page_output(source)
         settings = replace(
             base, input=source, output=normal_path(output), recursive=base.recursive or args.recursive,
             shared_assets=base.shared_assets or shared,
@@ -436,6 +445,8 @@ def main(argv: list[str] | None = None) -> int:
         return _write_example("\n".join(values), args.example_css, args.force)
     try:
         settings = settings_list_from_args(args)
+        if args.serve and any(item.markdown_mode for item in settings):
+            raise ValueError("--serve requires HTML output; use --watch for Jekyll Markdown")
         if args.serve or args.watch:
             return watch(settings, serve=args.serve, port=args.port)
         describe(BuildSession(settings).build())

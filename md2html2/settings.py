@@ -12,6 +12,8 @@ CONFIG_NAME = "md2html.json"
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 LIQUID_SUFFIXES = {".html", ".htm", ".xml"}
 PAGE_SUFFIXES = MARKDOWN_SUFFIXES | LIQUID_SUFFIXES
+OUTPUT_MODES = ("pages", "site", "jekyll", "jekyll-markdown")
+SITE_MODES = {"site", "jekyll"}
 
 
 def normal_path(path: Path) -> Path:
@@ -20,6 +22,10 @@ def normal_path(path: Path) -> Path:
 
 def page_output(path: Path) -> Path:
     return path.with_suffix(".html") if path.suffix.lower() in MARKDOWN_SUFFIXES else path
+
+
+def default_output(mode: str) -> Path:
+    return Path("_site" if mode in SITE_MODES else "markdown" if mode == "jekyll-markdown" else "html")
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,7 @@ class Settings:
     recursive: bool = False
     clean: bool = False
     exclude: tuple[str, ...] = ()
+    frontmatter: dict[str, Any] = field(default_factory=dict)
     site_data: dict[str, Any] = field(default_factory=dict)
     commands: dict[str, str] = field(default_factory=dict)
     highlight_style: str = "default"
@@ -67,7 +74,19 @@ class Settings:
 
     @property
     def shared_math_assets(self) -> bool:
-        return self.input.is_dir() and self.math.backend == "mathjax-chtml" and (self.output_mode == "site" or self.shared_assets)
+        return self.input.is_dir() and self.math.backend == "mathjax-chtml" and (self.site_mode or self.shared_assets)
+
+    @property
+    def site_mode(self) -> bool:
+        return self.output_mode in SITE_MODES
+
+    @property
+    def jekyll_mode(self) -> bool:
+        return self.output_mode == "jekyll"
+
+    @property
+    def markdown_mode(self) -> bool:
+        return self.output_mode == "jekyll-markdown"
 
 
 def find_config(start: Path) -> Path | None:
@@ -123,22 +142,25 @@ def load_settings(config_path: Path) -> Settings:
         stylesheets = [stylesheets]
     if not isinstance(stylesheets, list):
         raise ValueError("stylesheets must be a path or a list of paths")
+    frontmatter = raw.get("frontmatter") or {}
+    if not isinstance(frontmatter, dict):
+        raise ValueError("frontmatter must contain an object")
     timeout = float(raw.get("timeout", 120))
     if timeout <= 0:
         raise ValueError("timeout must be greater than zero")
     mode = str(raw.get("output_mode", "pages"))
-    if mode not in {"pages", "site"}:
-        raise ValueError("output_mode must be 'pages' or 'site'")
+    if mode not in OUTPUT_MODES:
+        raise ValueError("output_mode must be " + ", ".join(OUTPUT_MODES))
     reserved = {
         "input", "output", "output_mode", "templates", "template", "css", "stylesheets",
         "feature_css", "parse_liquid", "shared_assets", "math", "execute", "timeout", "force", "recursive", "clean",
-        "exclude", "commands", "highlight_style", "highlight_dark_style", "site",
+        "exclude", "frontmatter", "commands", "highlight_style", "highlight_dark_style", "site",
     }
     site_data = dict(raw.get("site") or {})
     site_data.update({key: value for key, value in raw.items() if key not in reserved})
     return Settings(
         input=path_value("input", "."),
-        output=path_value("output", "_site" if mode == "site" else "html"),
+        output=path_value("output", str(default_output(mode))),
         output_mode=mode,
         project_root=root,
         templates=template_path,
@@ -152,9 +174,10 @@ def load_settings(config_path: Path) -> Settings:
         execute=bool(raw.get("execute", False)),
         timeout=timeout,
         force=bool(raw.get("force", False)),
-        recursive=bool(raw.get("recursive", mode == "site")),
+        recursive=bool(raw.get("recursive", mode != "pages")),
         clean=bool(raw.get("clean", False)),
         exclude=tuple(str(item) for item in raw.get("exclude", ())),
+        frontmatter=dict(frontmatter),
         site_data=site_data,
         commands={str(key): str(value) for key, value in (raw.get("commands") or {}).items()},
         highlight_style=str(raw.get("highlight_style", "default")),

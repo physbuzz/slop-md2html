@@ -17,12 +17,15 @@ from typing import Any
 from liquid.exceptions import LiquidError
 from pygments.formatters import HtmlFormatter
 from pygments.util import ClassNotFound
+import yaml
 
-from .render import ContentRenderer, Executor, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
+from .render import FRONTMATTER, ContentRenderer, Executor, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
 from .settings import MARKDOWN_SUFFIXES, PAGE_SUFFIXES, Settings, normal_path, page_output
 
 
 PROJECT_FILES = {"md2html.json"}
+JEKYLL_EXCLUDES = {".bundle", ".git", ".jekyll-cache", ".jekyll-metadata", ".sass-cache", ".svn", "_site", "Gemfile", "Gemfile.lock", "node_modules"}
+MARKDOWN_EXCLUDES = JEKYLL_EXCLUDES - {"Gemfile", "Gemfile.lock"} | {".md2html-cache", "__pycache__"}
 CHTML_CDN = "https://cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font@4.1.3/chtml/woff2"
 FONT_FACE = re.compile(r"@font-face\s*/\*\s*(MJX(?:-TEX)?-[A-Z0-9]+)\s*\*/\s*\{.*?\}\s*", re.DOTALL)
 CSS_IMPORT = re.compile(r"@import\s+(?:url\()?['\"]?([^'\")\s;]+)", re.IGNORECASE)
@@ -55,8 +58,8 @@ class Page:
         data["name"] = self.source.name
         data["url"] = self.url
         data.setdefault("path", self.relative.as_posix())
-        data.setdefault("tags", [])
-        data.setdefault("categories", [])
+        data["tags"] = names(data.get("tags") or data.get("tag"))
+        data["categories"] = names(data.get("categories") or data.get("category"))
         data.setdefault("excerpt", self._excerpt())
         return data
 
@@ -66,6 +69,14 @@ class Page:
             if value and not value.startswith(("@", "{%")):
                 return value
         return ""
+
+
+def names(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part for part in re.split(r"\s*,\s*|\s+", value) if part]
+    return [str(item) for item in value]
 
 
 @dataclass
@@ -88,6 +99,7 @@ class Project:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.source_root = settings.input if settings.input.is_dir() else settings.input.parent
+        self.site_config = self.source_root / "_config.yml"
         self.bundled_templates = Path(str(files("md2html2").joinpath("default_templates")))
         self.bundled_assets = Path(str(files("md2html2").joinpath("assets")))
         self.site = self._site_data()
@@ -105,6 +117,7 @@ class Project:
         self.math_fonts: set[str] = set()
         self.shared_dependencies: set[Path] = set()
         self.post_sources: set[Path] = set()
+        self.ignored_sources: set[Path] = set()
 
     def build(self, only: set[Path] | None = None, *, skip_unchanged: bool = False) -> BuildResult:
         self._validate_paths()
@@ -118,7 +131,7 @@ class Project:
             for page in selected for output, _, paginator in self._page_outputs(page)
         ):
             skip_unchanged = False
-        if only is None and self.settings.clean and self.settings.output_mode == "site" and self.settings.output.exists():
+        if only is None and self.settings.clean and self.settings.input.is_dir() and self.settings.output.exists():
             shutil.rmtree(self.settings.output)
         if self.settings.shared_assets and self.settings.output_mode == "pages":
             self._write_shared_css(result)
@@ -133,7 +146,7 @@ class Project:
                     result.page_dependencies.setdefault(page.source, set()).update(self._content_sources(page, paginator) | self.shared_dependencies)
                     continue
                 rendered = self._render_page(page, output_relative, url, paginator)
-                shared_math = self.settings.output_mode == "site" or (self.settings.shared_assets and self.settings.input.is_dir())
+                shared_math = self.settings.site_mode or (self.settings.shared_assets and self.settings.input.is_dir())
                 if shared_math and rendered.features.math_css:
                     stylesheet, fonts = self._write_math_assets(rendered.features, result, target)
                     tags = [
@@ -141,19 +154,19 @@ class Project:
                         f'  <link rel="stylesheet" href="{stylesheet}">',
                     ]
                     assets = "\n".join(tags) + "\n"
-                    head_end = rendered.html.find("</head>")
-                    head = rendered.html[:head_end] if head_end >= 0 else rendered.html
+                    head_end = rendered.content.find("</head>")
+                    head = rendered.content[:head_end] if head_end >= 0 else rendered.content
                     external_script = re.search(r"<script\b[^>]*\bsrc\s*=", head, re.IGNORECASE)
                     if external_script:
-                        line_start = rendered.html.rfind("\n", 0, external_script.start()) + 1
-                        insertion = line_start if rendered.html[line_start:external_script.start()].isspace() else external_script.start()
-                        rendered.html = rendered.html[:insertion] + assets + rendered.html[insertion:]
+                        line_start = rendered.content.rfind("\n", 0, external_script.start()) + 1
+                        insertion = line_start if rendered.content[line_start:external_script.start()].isspace() else external_script.start()
+                        rendered.content = rendered.content[:insertion] + assets + rendered.content[insertion:]
                     elif head_end >= 0:
-                        rendered.html = rendered.html[:head_end] + assets + rendered.html[head_end:]
+                        rendered.content = rendered.content[:head_end] + assets + rendered.content[head_end:]
                     else:
-                        rendered.html = assets + rendered.html
+                        rendered.content = assets + rendered.content
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(rendered.html, encoding="utf-8")
+                target.write_text(rendered.content, encoding="utf-8")
                 if self.settings.input.is_file():
                     self._copy_page_assets(target, rendered, result)
                 if rendered.executor:
@@ -161,11 +174,11 @@ class Project:
                 result.written.append(target)
                 result.warnings.extend(rendered.warnings)
                 result.page_dependencies.setdefault(page.source, set()).update(rendered.dependencies)
-        if only is None and not result.skipped and (self.settings.output_mode == "site" or self.settings.shared_assets):
+        if only is None and not result.skipped and (self.settings.site_mode or self.settings.shared_assets):
             self._prune_math_assets()
         if only is None and self.settings.input.is_dir():
             self._copy_static(pages, result)
-        if self.settings.output_mode == "site" and (only is None or any(page.relative.parts[:1] == ("_posts",) for page in selected)):
+        if self.settings.site_mode and (only is None or any(page.relative.parts[:1] == ("_posts",) for page in selected)):
             self._write_feed(pages, result)
         if only is None and self.settings.input.is_dir():
             self._prune_execution_pages(pages, result.warnings)
@@ -183,7 +196,16 @@ class Project:
                 raise ValueError("clean site output cannot contain the input directory")
 
     def _site_data(self) -> dict[str, Any]:
-        data = dict(self.settings.site_data)
+        data: dict[str, Any] = {}
+        if self.settings.jekyll_mode and self.site_config.is_file():
+            try:
+                loaded = yaml.safe_load(self.site_config.read_text(encoding="utf-8")) or {}
+            except (OSError, yaml.YAMLError) as error:
+                raise ValueError(f"could not read Jekyll configuration {self.site_config}: {error}") from error
+            if not isinstance(loaded, dict):
+                raise ValueError(f"Jekyll configuration must contain a mapping: {self.site_config}")
+            data.update(loaded)
+        data.update(self.settings.site_data)
         data.setdefault("title", self.source_root.name)
         data.setdefault("description", "")
         data.setdefault("url", "")
@@ -196,20 +218,29 @@ class Project:
         if source.is_file():
             if source.suffix.lower() not in PAGE_SUFFIXES:
                 raise ValueError(f"unsupported page type: {source}")
-            metadata, body = parse_frontmatter(source.read_text(encoding="utf-8"))
+            text = source.read_text(encoding="utf-8")
+            metadata, body = parse_frontmatter(text)
             relative = Path(source.name)
             output_relative = Path(self.settings.output.name)
             return [Page(source, relative, metadata, body, "/" + output_relative.name, output_relative)]
 
-        pattern = "**/*" if self.settings.recursive or self.settings.output_mode == "site" else "*"
+        pattern = "**/*" if self.settings.recursive or self.settings.site_mode or self.settings.markdown_mode else "*"
         pages: list[Page] = []
         for path in sorted(source.glob(pattern)):
             if not path.is_file() or self._excluded(path):
                 continue
             relative = path.relative_to(source)
-            if path.suffix.lower() in PAGE_SUFFIXES:
-                metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
-                url, output = self._output_policy(relative, metadata)
+            suffixes = MARKDOWN_SUFFIXES if self.settings.markdown_mode else PAGE_SUFFIXES
+            if path.suffix.lower() in suffixes:
+                text = path.read_text(encoding="utf-8")
+                metadata, body = parse_frontmatter(text)
+                post = relative.parts[:1] == ("_posts",)
+                if self.settings.jekyll_mode and not post and not FRONTMATTER.match(text):
+                    continue
+                if self.settings.jekyll_mode and metadata.get("published", True) is False:
+                    self.ignored_sources.add(path)
+                    continue
+                url, output = ("/" + relative.as_posix(), relative) if self.settings.markdown_mode else self._output_policy(relative, metadata)
                 pages.append(Page(path, relative, metadata, body, url, output))
         return pages
 
@@ -218,13 +249,24 @@ class Project:
         parts = relative.parts
         if self.settings.output.is_relative_to(self.source_root) and path.is_relative_to(self.settings.output):
             return True
+        if self.settings.markdown_mode and (any(part in MARKDOWN_EXCLUDES for part in parts) or parts[:2] == ("vendor", "bundle")):
+            return True
+        include_value = self.site.get("include") or ()
+        includes = [str(include_value)] if isinstance(include_value, str) else [str(value) for value in include_value]
+        if any(relative.match(pattern.strip("/")) for pattern in includes):
+            return False
         if relative.name.startswith("_"):
             return True
         if any(part.startswith(".") for part in parts):
             return True
         if any(part.startswith("_") and part not in {"_posts"} for part in parts[:-1]):
             return True
-        excludes = [*self.settings.exclude, *(self.site.get("exclude") or [])]
+        exclude_value = self.site.get("exclude") or ()
+        excludes = [*self.settings.exclude, *([exclude_value] if isinstance(exclude_value, str) else exclude_value)]
+        if self.settings.jekyll_mode:
+            vendor = len(parts) > 1 and parts[0] == "vendor" and parts[1] in {"bundle", "cache", "gems", "ruby"}
+            if any(part in JEKYLL_EXCLUDES for part in parts) or vendor:
+                return True
         for pattern in excludes:
             normalized = str(pattern).strip("/")
             if relative.as_posix() == normalized or relative.as_posix().startswith(normalized + "/") or relative.match(normalized):
@@ -239,8 +281,12 @@ class Project:
             url = str(permalink)
         elif match:
             year, month, day, slug = match.groups()
-            pattern = str(self.site.get("permalink", "/:year/:month/:day/:title.html"))
-            url = pattern.replace(":year", year).replace(":month", month).replace(":day", day).replace(":title", slugify(slug))
+            default = "/:categories/:year/:month/:day/:title.html" if self.settings.jekyll_mode else "/:year/:month/:day/:title.html"
+            pattern = str(self.site.get("permalink", default))
+            categories = "/".join(names(metadata.get("categories") or metadata.get("category")))
+            url = pattern.replace(":year", year).replace(":month", month).replace(":day", day)
+            url = url.replace(":title", slugify(slug)).replace(":slug", slugify(slug)).replace(":categories", categories)
+            url = re.sub(r"/{2,}", "/", url)
         else:
             normal = page_output(relative)
             if normal.name == "index.html":
@@ -261,29 +307,27 @@ class Project:
         post_pages.sort(key=lambda page: self._date(page), reverse=True)
         post_data = [page.data() for page in post_pages]
         self.site["posts"] = post_data
-        self.site["pages"] = [page.data() for page in pages]
+        self.site["pages"] = [page.data() for page in pages if not self.settings.jekyll_mode or page not in post_pages]
         tags: dict[str, list[dict[str, Any]]] = {}
         categories: dict[str, list[dict[str, Any]]] = {}
         for post, data in zip(post_pages, post_data):
             post.metadata["date"] = data["date"] = self._date(post)
-            for name in self._names(data.get("tags")):
+            data["slug"] = post.relative.stem[11:] if re.match(r"\d{4}-\d{2}-\d{2}-", post.relative.stem) else post.relative.stem
+            data["id"] = post.url.rstrip("/") or "/"
+            for name in data["tags"]:
                 tags.setdefault(name, []).append(data)
-            for name in self._names(data.get("categories")):
+            for name in data["categories"]:
                 categories.setdefault(name, []).append(data)
         self.site["tags"] = tags
         self.site["categories"] = categories
         self.site["tag_list"] = [
-            {"name": name, "slug": slugify(name), "posts": values}
+            {"name": name, "slug": slugify(name), "posts": values, "size": len(values)}
             for name, values in sorted(tags.items(), key=lambda item: item[0].lower())
         ]
-
-    @staticmethod
-    def _names(value: Any) -> list[str]:
-        if value is None:
-            return []
-        if isinstance(value, str):
-            return [part for part in re.split(r"\s*,\s*|\s+", value) if part]
-        return [str(item) for item in value]
+        self.site["category_list"] = [
+            {"name": name, "slug": slugify(name), "posts": values, "size": len(values)}
+            for name, values in sorted(categories.items(), key=lambda item: item[0].lower())
+        ]
 
     @staticmethod
     def _date(page: Page) -> datetime:
@@ -302,7 +346,7 @@ class Project:
         return datetime(*map(int, match.groups()), tzinfo=timezone.utc) if match else datetime.fromtimestamp(page.source.stat().st_mtime, timezone.utc)
 
     def _page_outputs(self, page: Page) -> list[tuple[Path, str, dict[str, Any] | None]]:
-        if self.settings.output_mode != "site" or page.relative.name != "index.html":
+        if not self.settings.site_mode or page.relative.name != "index.html":
             return [(page.output_relative, page.url, None)]
         per_page = int(self.site.get("paginate") or 0)
         if per_page <= 0:
@@ -334,6 +378,8 @@ class Project:
 
     def _content_sources(self, page: Page, paginator: dict[str, Any] | None) -> set[Path]:
         sources = {page.source}
+        if self.settings.jekyll_mode and self.site_config.is_file():
+            sources.add(self.site_config)
         if paginator is not None:
             sources.update(self.post_sources)
         return sources
@@ -351,7 +397,7 @@ class Project:
         context = {"site": self.site, "page": page_data}
         if paginator is not None:
             context["paginator"] = paginator
-        parse_liquid = self.settings.parse_liquid and page.metadata.get("parse_liquid", True) is not False
+        parse_liquid = self.settings.parse_liquid and page.metadata.get("render_with_liquid", True) is not False
         markdown = page.source.suffix.lower() in MARKDOWN_SUFFIXES
         rendered = (
             self.renderer.render(page.source, page.body, context, cache_page=output_relative, parse_liquid=parse_liquid)
@@ -359,18 +405,21 @@ class Project:
         )
         page_data["title"] = rendered.title
         page.metadata["title"] = rendered.title
-        if self.settings.output_mode == "site":
-            content = self._apply_layouts(rendered.html, page.source, rendered, context)
+        if self.settings.markdown_mode:
+            metadata = {**self.settings.frontmatter, **page.metadata}
+            content = "---\n" + yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True) + "---\n\n" + rendered.content
+        elif self.settings.site_mode:
+            content = self._apply_layouts(rendered.content, page.source, rendered, context)
         elif markdown:
             content = self._page_template(rendered, page_data, self._target(page))
         else:
-            content = rendered.html
-        rendered.html = content.rstrip() + "\n"
+            content = rendered.content
+        rendered.content = content.rstrip() + "\n"
         rendered.dependencies.update(self.loader.dependencies)
         rendered.dependencies.update(self.shared_dependencies)
         rendered.dependencies.update(self._content_sources(page, paginator))
         for pattern in (STYLESHEET, MEDIA_ASSET):
-            for href in pattern.findall(rendered.html):
+            for href in pattern.findall(rendered.content):
                 name = href.split("?", 1)[0].split("#", 1)[0]
                 if name and "://" not in name and not name.startswith(("//", "data:", "mailto:")):
                     path = (self.source_root if name.startswith("/") else page.source.parent) / name.lstrip("/")
@@ -449,7 +498,7 @@ class Project:
         context = {
             "site": self.site,
             "page": page,
-            "content": rendered.html,
+            "content": rendered.content,
             "md2html": {
                 "css": css or None,
                 "stylesheets": stylesheets,
@@ -460,7 +509,7 @@ class Project:
             return self.liquid.from_string(liquid_source(path.read_text(encoding="utf-8"))).render(**context)
         except LiquidError as error:
             rendered.warnings.append(f"template failed: {error}")
-            return rendered.html + f'<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
+            return rendered.content + f'<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
 
     @staticmethod
     def _values(value: Any) -> list[str]:
@@ -568,7 +617,7 @@ class Project:
         base = str(self.site.get("baseurl", "")).rstrip("/")
 
         def url(path: Path) -> str:
-            if self.settings.output_mode == "site":
+            if self.settings.site_mode:
                 return base + "/" + path.relative_to(root).as_posix()
             return Path(os.path.relpath(path, page_target.parent)).as_posix()
 
@@ -577,7 +626,7 @@ class Project:
         if mode == "all" and features.math_font_dir:
             fonts = {path.stem.removeprefix("mjx-tex-") for path in features.math_font_dir.glob("mjx-tex-*.woff2")}
         css = self._selected_math_css(features, fonts)
-        if self.settings.output_mode == "site":
+        if self.settings.site_mode:
             css = (self.bundled_assets / "feature-math.css").read_text(encoding="utf-8") + "\n" + css
         if mode == "none":
             css = FONT_FACE.sub("", css)
@@ -654,12 +703,17 @@ class Project:
     def _copy_static(self, pages: list[Page], result: BuildResult) -> None:
         page_sources = {page.source for page in pages}
         for source in sorted(self.source_root.rglob("*")):
-            if not source.is_file() or source in page_sources or self._excluded(source):
+            if not source.is_file() or source in page_sources or source in self.ignored_sources or source.is_relative_to(self.settings.output):
                 continue
             relative = source.relative_to(self.source_root)
-            if relative.name in PROJECT_FILES or any(part in {"_layouts", "_includes", "_posts"} for part in relative.parts):
+            if self.settings.markdown_mode:
+                private = any(part in MARKDOWN_EXCLUDES for part in relative.parts) or relative.parts[:2] == ("vendor", "bundle")
+                excluded = any(relative.match(pattern) for pattern in self.settings.exclude)
+            else:
+                private, excluded = False, self._excluded(source)
+            if private or excluded or relative.name in PROJECT_FILES:
                 continue
-            if source.suffix.lower() in MARKDOWN_SUFFIXES:
+            if not self.settings.markdown_mode and any(part in {"_layouts", "_includes", "_posts"} for part in relative.parts):
                 continue
             target = self.settings.output / relative
             if source.absolute() == target.absolute():
