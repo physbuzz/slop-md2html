@@ -61,18 +61,19 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-f", "--force", action="store_true", help="rerun executable content, rebuild unchanged pages, or replace an example file")
     result.add_argument("-s", "--serve", action="store_true", help="serve the output and rebuild when source files change")
     result.add_argument("-w", "--watch", action="store_true", help="rebuild when source files change without starting a server")
-    result.add_argument("--port", type=int, default=8000, help="preview server port (default: 8000)")
+    result.add_argument("-p", "--port", type=int, default=8000, help="preview server port (default: 8000)")
     result.add_argument("--config", type=Path, help="JSON configuration file; relative paths inside it are resolved from that file")
     result.add_argument("--output-mode", choices=OUTPUT_MODES, help="build pages, a native site, a Jekyll site, or Jekyll Markdown")
     result.add_argument("--jekyll", action="store_const", const="jekyll", dest="output_mode", help="build a Jekyll-compatible site")
     result.add_argument("--jekyll-markdown", action="store_const", const="jekyll-markdown", dest="output_mode", help="write Markdown for Jekyll to finish")
-    result.add_argument("--templates", type=Path, help="directory searched before built-in templates")
+    result.add_argument("--templates", action="append", type=Path, help="template directory; repeat to add another search directory")
     result.add_argument("--template", help="standalone HTML template name or path")
     result.add_argument("--css", action="append", help="CSS file to embed; repeat to combine files")
     result.add_argument("--stylesheet", action="append", help="stylesheet href; repeat to add more")
     result.add_argument("--shared-assets", action="store_true", help="write shared page CSS instead of embedding it")
     result.add_argument("--no-css", action="store_true", help="do not embed CSS in standalone pages")
     result.add_argument("--no-feature-css", action="store_true", help="omit CSS for generated code, math, TOCs, images, and warnings")
+    result.add_argument("--no-minify-css", action="store_true", help="leave generated CSS readable")
     result.add_argument("--no-liquid", action="store_true", help="do not render Liquid in source documents")
     result.add_argument("--highlight-style", type=_pygments_style, help="Pygments style name for light syntax highlighting")
     result.add_argument("--highlight-dark-style", type=_pygments_style, help="Pygments style name for dark syntax highlighting")
@@ -115,7 +116,7 @@ def _apply_cli(settings: Settings, args: argparse.Namespace) -> Settings:
         if getattr(args, name):
             changes[name] = True
     if args.templates:
-        changes["templates"] = normal_path(args.templates)
+        changes["templates"] = tuple(normal_path(path) for path in args.templates)
     if args.css is not None:
         changes["css"] = tuple(args.css)
     if args.stylesheet is not None:
@@ -124,6 +125,8 @@ def _apply_cli(settings: Settings, args: argparse.Namespace) -> Settings:
         changes.update(css=(), feature_css=False)
     elif args.no_feature_css:
         changes["feature_css"] = False
+    if args.no_minify_css:
+        changes["minify_css"] = False
     if args.no_liquid:
         changes["parse_liquid"] = False
     if args.math:

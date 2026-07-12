@@ -14,7 +14,7 @@ import pytest
 from md2html2.cli import WatchGraph, _server, main, parser, settings_from_args, settings_list_from_args
 from md2html2.project import Project
 from md2html2.render import parse_frontmatter
-from md2html2.settings import MathSettings, Settings, find_config, load_settings, normal_path
+from md2html2.settings import ImageSettings, MathSettings, Settings, find_config, load_settings, normal_path
 
 
 def build_one(tmp_path: Path, text: str, **changes) -> str:
@@ -47,10 +47,10 @@ def test_single_file_writes_only_sibling_html(tmp_path: Path):
     assert "Text" in output and 'name="text"' in output
     assert output.count(":has(") == 8
     assert '<details class="reader-widget">' in output and '<form aria-label="reader controls">' in output
-    assert "border-radius: 4px" in output and ".reader-widget form" in output
-    assert "--reader-text-size: .9rem" in output
-    assert 'html[data-text="small"] { --reader-text-size: .8rem; }' in output
-    assert 'html[data-text="large"] { --reader-text-size: 1rem; }' in output
+    assert "border-radius:4px" in output and ".reader-widget form" in output
+    assert "--reader-text-size:.9rem" in output
+    assert 'html[data-text="small"]{--reader-text-size:.8rem}' in output
+    assert 'html[data-text="large"]{--reader-text-size:1rem}' in output
 
 
 def test_frontmatter_title_and_yaml_types(tmp_path: Path):
@@ -68,8 +68,8 @@ def test_math_is_shielded_and_only_adds_assets_when_used(tmp_path: Path):
         "# Math\n\n$x_i$ and $$a_b^2$$\n\n\\begin{align*}x&=1\\\\y&=2\\end{align*}\n",
     )
     assert "MathJax" in output
-    assert '<span class="math inline-math"' in output
-    assert '<div class="math display-math"' in output
+    assert '<span class="math inline-math' in output
+    assert '<div class="math display-math' in output
     assert "data-md2html-token" not in output
     assert "<em>" not in output
 
@@ -79,9 +79,13 @@ def test_build_time_math_backends(tmp_path: Path, backend: str, marker: str):
     output = build_one(tmp_path, "# Math\n\n$x+1$\n", math=MathSettings(backend))
     assert marker in output
     assert '<span class="math-copy-source">$x+1$</span>' in output
-    assert 'class="math-rendered" aria-hidden="true"' in output
+    assert "math-rendered" in output and 'aria-hidden="true"' in output
     assert "data-md2html-math-copy" in output
     assert "tex-mml-chtml.js" not in output
+    if backend == "svg":
+        assert "--md2html-math-svg-inline-align:" in output and 'fill="currentColor"' in output
+    else:
+        assert "md2html-mathml" in output and "display:inline-block" in output and "vertical-align:baseline" in output
 
 
 def test_mathjax_chtml_is_static_and_standalone(tmp_path: Path):
@@ -90,10 +94,19 @@ def test_mathjax_chtml_is_static_and_standalone(tmp_path: Path):
     assert "@font-face" in output
     assert "mjx-c.mjx-c" in output
     assert "cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font" in output
-    assert "data-tex=" in output and "data-latex=" not in output
+    assert "data-tex=" not in output and "data-latex=" not in output
     assert '<span class="math-copy-source">$$x^2+1$$</span>' in output
     assert "tex-mml-chtml.js" not in output
     assert sorted(path.name for path in tmp_path.iterdir()) == ["article.html", "article.md"]
+
+
+@pytest.mark.parametrize("backend, expected, absent", [
+    ("mathjax", "tex-mml-chtml.js", "<mjx-container"),
+    ("raw", "$x+1$", "tex-mml-chtml.js"),
+])
+def test_browser_and_raw_math_backends(tmp_path: Path, backend: str, expected: str, absent: str):
+    output = build_one(tmp_path, "$x+1$\n", math=MathSettings(backend))
+    assert expected in output and absent not in output
 
 
 def test_code_and_comments_do_not_become_liquid(tmp_path: Path):
@@ -129,7 +142,7 @@ def test_directives_resolve_from_including_file_and_make_toc(tmp_path: Path):
     assert '<summary class="code-summary"><a href="parts/example.py">example.py</a>' in output
     assert '<div class="codehilite"><pre>' in output
     assert 'class="source"' not in output and 'class="highlight"' not in output
-    assert 'content: "►"' in output
+    assert 'content:"►"' in output
     assert '<div class="table-of-contents">' in output
 
 
@@ -156,7 +169,7 @@ def test_highlighted_code_uses_one_box(tmp_path: Path):
     output = build_one(tmp_path, "# Code\n\n```python\nprint('hello')\n```\n")
     assert '<div class="codehilite"><pre>' in output
     assert '<div class="code-box">' not in output
-    assert ".codehilite .k { color: #008000; font-weight: bold }" in output
+    assert ".codehilite .k{color:#008000;font-weight:bold}" in output
     assert 'html[data-theme="dark"] .codehilite .k' in output
 
 
@@ -180,6 +193,15 @@ def test_obsidian_images_and_embedded_video_are_responsive(tmp_path: Path):
     assert "aspect-ratio:16/9" in video.replace(" ", "")
 
 
+def test_obsidian_images_use_configured_defaults_with_local_overrides(tmp_path: Path):
+    (tmp_path / "diagram.png").write_bytes(b"image")
+    defaults = ImageSettings(class_name="centered shadow", width="45%")
+    output = build_one(tmp_path, "![[diagram.png]]\n", images=defaults)
+    assert 'class="obsidian-image centered shadow"' in output and 'style="width:45%"' in output
+    output = build_one(tmp_path, "![[diagram.png|width=20em|class=wide]]\n", images=defaults)
+    assert 'class="obsidian-image centered shadow wide"' in output and 'style="width:20em"' in output
+
+
 def test_page_dependencies_follow_includes_templates_and_css_but_not_source_internals(tmp_path: Path):
     templates = tmp_path / "templates"
     parts = tmp_path / "parts"
@@ -199,7 +221,7 @@ def test_page_dependencies_follow_includes_templates_and_css_but_not_source_inte
     (tmp_path / "header.h").write_text("// deliberately not followed\n", encoding="utf-8")
     source = tmp_path / "article.md"
     source.write_text("@include(parts/one.md)\n\n@src(file.cpp)\n", encoding="utf-8")
-    settings = Settings.single(source).with_cli(templates=templates)
+    settings = Settings.single(source).with_cli(templates=(templates,))
     result = Project(settings).build()
     dependencies = result.page_dependencies[source]
     expected = {source, parts / "one.md", parts / "two.md", tmp_path / "file.cpp",
@@ -251,7 +273,7 @@ def test_liquid_include_cycle_warns_without_aborting(tmp_path: Path):
     (templates / "loop.html").write_text("{% include 'loop.html' %}", encoding="utf-8")
     source = tmp_path / "article.md"
     source.write_text("# Still built\n", encoding="utf-8")
-    result = Project(Settings.single(source).with_cli(templates=templates)).build()
+    result = Project(Settings.single(source).with_cli(templates=(templates,))).build()
     assert any("recursive include" in warning for warning in result.warnings)
     assert "Template cycle or error" in result.written[0].read_text(encoding="utf-8")
 
@@ -473,7 +495,7 @@ def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
     )
     (source / "site.js").write_text("// reader controls\n", encoding="utf-8")
     (source / "_layouts" / "default.html").write_text(
-        "<!doctype html><html><head>{% include head.html %}</head><body>{{ content }}</body></html>", encoding="utf-8"
+        "<!doctype html><html><head>{% include head.html %}</head><body>{% if md2html.jekyll_compatibility %}md2html compatibility{% endif %}{{ content }}</body></html>", encoding="utf-8"
     )
     (source / "_layouts" / "post.html").write_text(
         "---\nlayout: default\n---\n<article><h1>{{ page.title }}</h1>{{ content }}</article>", encoding="utf-8"
@@ -517,6 +539,7 @@ def test_native_site_model_layouts_includes_assets_and_dated_urls(tmp_path: Path
     post_text = post.read_text(encoding="utf-8")
     assert "<title>Gaussian Integral | Native site</title>" in post_text
     assert "<article><h1>Gaussian Integral</h1>" in post_text
+    assert "md2html compatibility" not in post_text
     assert (output / "assets/plain.txt").read_text() == "asset"
     index = (output / "index.html").read_text()
     assert 'href="/2026/05/18/gaussianintegral.html"' in index
@@ -612,7 +635,8 @@ def test_jekyll_mode_uses_config_conventions_and_shared_features(tmp_path: Path)
         "title: Jekyll Site\nurl: https://example.test\nbaseurl: /notes\n",
     )
     (source / "_layouts/default.html").write_text(
-        "<title>{{ site.title }} | {{ page.title }}</title>{{ content }}",
+        "<title>{{ site.title }} | {{ page.title }}</title>"
+        "{% if md2html.jekyll_compatibility %}md2html compatibility{% endif %}{{ content }}",
     )
     (source / "program.py").write_text("print('executed')\n")
     post = source / "_posts/2026-07-11-feature.md"
@@ -636,6 +660,7 @@ def test_jekyll_mode_uses_config_conventions_and_shared_features(tmp_path: Path)
 
     post_output = output / "physics/2026/07/11/feature.html"
     assert "<title>Jekyll Site | Feature</title>" in post_output.read_text()
+    assert "md2html compatibility" in post_output.read_text()
     assert "codehilite" in post_output.read_text() and "executed" in post_output.read_text()
     assert 'href="/notes/program.py"' in post_output.read_text()
     assert "/physics/2026/07/11/feature.html Math,Code" in (output / "index.html").read_text()
@@ -843,13 +868,15 @@ def test_only_md2html_json_is_discovered_and_configuration_is_json(tmp_path: Pat
     with pytest.raises(ValueError, match="must be a JSON file"):
         load_settings(tmp_path / "md2html.yml")
     config = tmp_path / "md2html.json"
-    config.write_text('{"input":"content","timeout":3.5,"feature_css":false,"parse_liquid":false,"highlight_style":"friendly"}')
+    config.write_text('{"input":"content","timeout":3.5,"feature_css":false,"minify_css":false,"parse_liquid":false,"highlight_style":"friendly","images":{"class":"centered","width":"50%"}}')
     assert find_config(tmp_path) == config
     settings = load_settings(config)
     assert settings.timeout == 3.5
     assert not settings.feature_css
+    assert not settings.minify_css
     assert not settings.parse_liquid
     assert settings.highlight_style == "friendly"
+    assert settings.images == ImageSettings("centered", "50%")
     config.write_text("input: content\n")
     with pytest.raises(ValueError, match="could not read configuration"):
         load_settings(config)
@@ -862,7 +889,22 @@ def test_relative_config_keeps_relative_paths(tmp_path: Path, monkeypatch: pytes
     assert settings.project_root == Path(".")
     assert settings.input == Path("content")
     assert settings.output == Path("public")
-    assert settings.templates == Path("templates")
+    assert settings.templates == (Path("templates"),)
+
+
+def test_template_directories_are_ordered_and_repeatable(tmp_path: Path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "page.html").write_text("first {{ content }}")
+    (second / "page.html").write_text("second {{ content }}")
+    config = tmp_path / "md2html.json"
+    config.write_text('{"input":"article.md","templates":["first","second"]}')
+    assert load_settings(config).templates == (first, second)
+    output = build_one(tmp_path, "# Ordered\n", templates=(first, second))
+    assert output.startswith("first ") and "second " not in output
+    args = parser().parse_args(["article.md", "--templates", "first", "--templates", "second"])
+    assert settings_from_args(args).templates == (Path("first"), Path("second"))
 
 
 def test_template_directory_and_companion_css_take_priority(tmp_path: Path):
@@ -873,7 +915,7 @@ def test_template_directory_and_companion_css_take_priority(tmp_path: Path):
     templates.mkdir()
     (templates / "page.html").write_text("<title>{{ page.title }}</title><style>{{ md2html.css }}</style>{{ content }}")
     (templates / "page.css").write_text("body{color:rebeccapurple}")
-    output = build_one(tmp_path, "# Custom\n", templates=templates)
+    output = build_one(tmp_path, "# Custom\n", templates=(templates,))
     assert "rebeccapurple" in output
     assert "reader-controls" not in output
 
@@ -952,9 +994,40 @@ def test_custom_css_keeps_feature_css_and_highlight_styles_are_cli_names(tmp_pat
     Path("code.md").write_text("---\ncss: []\n---\n```python\nif True: print(1)\n```\n")
     assert main(["code.md", "--css", "base.css"]) == 0
     output = Path("code.html").read_text()
-    assert "color:navy" not in output and ".codehilite .k {" in output
+    assert "color:navy" not in output and ".codehilite .k{" in output
     with pytest.raises(SystemExit):
         parser().parse_args(["code.md", "--highlight-style", "not-a-pygments-style"])
+
+
+def test_css_is_minified_by_default_and_can_remain_readable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    Path("article.md").write_text("# CSS\n")
+    Path("custom.css").write_text('body { color: red; } p::before { content: "a : b"; }')
+    assert main(["article.md", "--css", "custom.css"]) == 0
+    compact = Path("article.html").read_text()
+    assert 'body{color:red}p::before{content:"a : b"}' in compact
+    assert main(["article.md", "--css", "custom.css", "--no-minify-css"]) == 0
+    readable = Path("article.html").read_text()
+    assert 'body { color: red; }' in readable and len(readable) > len(compact)
+
+
+def test_template_feature_introspection_uses_flat_booleans(tmp_path: Path):
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "page.html").write_text(
+        "{{ md2html.has_code }}|{{ md2html.has_toc }}|{{ md2html.has_images }}|"
+        "{{ md2html.has_warnings }}|{{ md2html.uses_svg_math }}|{{ md2html.uses_mathjax }}"
+        "|{{ md2html.jekyll_compatibility }}"
+    )
+    output = build_one(
+        tmp_path, "# Features\n\n@toc\n\n```py\npass\n```\n\n$x$\n",
+        templates=(templates,), math=MathSettings("svg"),
+    )
+    assert output.strip() == "true|true|false|false|true|false|false"
+
+
+def test_port_has_a_short_alias():
+    assert parser().parse_args(["-p", "4321"]).port == 4321
 
 
 def test_execution_timeout_is_configurable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

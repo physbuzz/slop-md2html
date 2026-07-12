@@ -30,8 +30,14 @@ def default_output(mode: str) -> Path:
 
 @dataclass(frozen=True)
 class MathSettings:
-    backend: str = "mathjax"
+    backend: str = "mathjax-chtml"
     chtml_fonts: str = "auto"
+
+
+@dataclass(frozen=True)
+class ImageSettings:
+    class_name: str | None = None
+    width: str | None = None
 
 
 @dataclass(frozen=True)
@@ -40,14 +46,16 @@ class Settings:
     output: Path
     output_mode: str = "pages"
     project_root: Path = field(default_factory=lambda: Path("."))
-    templates: Path | None = None
+    templates: tuple[Path, ...] = ()
     template: str = "page.html"
     css: tuple[str, ...] | None = None
     stylesheets: tuple[str, ...] = ()
     feature_css: bool = True
+    minify_css: bool = True
     parse_liquid: bool = True
     shared_assets: bool = False
     math: MathSettings = field(default_factory=MathSettings)
+    images: ImageSettings = field(default_factory=ImageSettings)
     execute: bool = False
     timeout: float = 120.0
     force: bool = False
@@ -130,8 +138,16 @@ def load_settings(config_path: Path) -> Settings:
     font_mode = str(math_value.get("chtml_fonts", "auto"))
     if font_mode not in {"auto", "all", "inline", "remote", "none"}:
         raise ValueError("math.chtml_fonts must be auto, all, inline, remote, or none")
-    templates = raw.get("templates")
-    template_path = None if templates is None else path_value("templates", str(templates))
+    templates = raw.get("templates", [])
+    if isinstance(templates, str):
+        templates = [templates]
+    if not isinstance(templates, list):
+        raise ValueError("templates must be a path or a list of paths")
+    def rooted(value: Any) -> Path:
+        path = normal_path(Path(str(value)))
+        return path if path.is_absolute() else normal_path(root / path)
+
+    template_paths = tuple(rooted(value) for value in templates)
     css = raw.get("css")
     if isinstance(css, str):
         css = [css]
@@ -145,6 +161,9 @@ def load_settings(config_path: Path) -> Settings:
     frontmatter = raw.get("frontmatter") or {}
     if not isinstance(frontmatter, dict):
         raise ValueError("frontmatter must contain an object")
+    images = raw.get("images", {}) or {}
+    if not isinstance(images, dict):
+        raise ValueError("images must contain an object")
     timeout = float(raw.get("timeout", 120))
     if timeout <= 0:
         raise ValueError("timeout must be greater than zero")
@@ -153,7 +172,7 @@ def load_settings(config_path: Path) -> Settings:
         raise ValueError("output_mode must be " + ", ".join(OUTPUT_MODES))
     reserved = {
         "input", "output", "output_mode", "templates", "template", "css", "stylesheets",
-        "feature_css", "parse_liquid", "shared_assets", "math", "execute", "timeout", "force", "recursive", "clean",
+        "feature_css", "minify_css", "parse_liquid", "shared_assets", "math", "images", "execute", "timeout", "force", "recursive", "clean",
         "exclude", "frontmatter", "commands", "highlight_style", "highlight_dark_style", "site",
     }
     site_data = dict(raw.get("site") or {})
@@ -163,14 +182,19 @@ def load_settings(config_path: Path) -> Settings:
         output=path_value("output", str(default_output(mode))),
         output_mode=mode,
         project_root=root,
-        templates=template_path,
+        templates=template_paths,
         template=str(raw.get("template", "page.html")),
         css=None if css is None else tuple(str(item) for item in css),
         stylesheets=tuple(str(item) for item in stylesheets),
         feature_css=bool(raw.get("feature_css", True)),
+        minify_css=bool(raw.get("minify_css", True)),
         parse_liquid=bool(raw.get("parse_liquid", True)),
         shared_assets=bool(raw.get("shared_assets", mode == "pages" and path_value("input", ".").is_dir())),
-        math=MathSettings(backend=str(math_value.get("backend", "mathjax")), chtml_fonts=font_mode),
+        math=MathSettings(backend=str(math_value.get("backend", "mathjax-chtml")), chtml_fonts=font_mode),
+        images=ImageSettings(
+            class_name=str(images["class"]) if images.get("class") is not None else None,
+            width=str(images["width"]) if images.get("width") is not None else None,
+        ),
         execute=bool(raw.get("execute", False)),
         timeout=timeout,
         force=bool(raw.get("force", False)),
@@ -189,10 +213,15 @@ EXAMPLE_CONFIG = """{
   "input": ".",
   "output": "_site",
   "output_mode": "site",
-  "templates": "templates",
+  "templates": ["templates"],
+  "minify_css": true,
   "parse_liquid": true,
   "math": {
-    "backend": "mathjax"
+    "backend": "mathjax-chtml"
+  },
+  "images": {
+    "class": null,
+    "width": null
   },
   "exclude": [
     "drafts"

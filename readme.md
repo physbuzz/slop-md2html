@@ -166,7 +166,7 @@ page instead.
 `--execute`, `--recursive`, `--force`, and `--serve` have the short forms `-e`,
 `-r`, `-f`, and `-s`, so `-erf` combines the first three. `--watch` rebuilds
 without starting a server. `--serve` starts a loopback-only server and also
-rebuilds. Use `--port` to change its port.
+rebuilds. Use `-p` or `--port` to change its port.
 
 `--force` reruns cached executable examples when execution is enabled. It also
 allows the starter commands to replace existing files. `--clean` removes a
@@ -201,11 +201,12 @@ building independent pages.
     "layout": "default"
   },
 
-  "templates": "templates",
+  "templates": ["templates"],
   "template": "page.html",
   "css": ["styles/base.css"],
   "stylesheets": ["styles/print.css"],
   "feature_css": true,
+  "minify_css": true,
   "parse_liquid": true,
   "shared_assets": true,
   "highlight_style": "default",
@@ -214,6 +215,11 @@ building independent pages.
   "math": {
     "backend": "mathjax-chtml",
     "chtml_fonts": "auto"
+  },
+
+  "images": {
+    "class": null,
+    "width": null
   },
 
   "execute": false,
@@ -258,11 +264,12 @@ needed.
 
 | Key | Meaning |
 | --- | --- |
-| `templates` | Search this directory before `_templates` and the bundled templates. |
+| `templates` | Search this directory or ordered list of directories before `_templates` and the bundled templates. |
 | `template` | Select the standalone page template. The default is `page.html`. |
 | `css` | Replace the template's base CSS with one path or a list. `null` selects companion or bundled CSS; `[]` selects no base CSS. |
 | `stylesheets` | Add one or more `<link rel="stylesheet">` entries. Relative local files are watched and copied with moved standalone output. |
 | `feature_css` | Add CSS for generated code, output, math, tables of contents, images, and warnings. The default is `true`. |
+| `minify_css` | Minify embedded and generated shared CSS. The default is `true`. |
 | `highlight_style` | Select a Pygments style name for light syntax highlighting. |
 | `highlight_dark_style` | Select a Pygments style name for dark and automatic dark-mode highlighting. |
 
@@ -272,6 +279,8 @@ needed.
 | --- | --- |
 | `math.backend` | Select `mathjax`, `mathjax-chtml`, `svg`, `mathml`, or `raw`. |
 | `math.chtml_fonts` | Select `auto`, `all`, `inline`, `remote`, or `none` for static CommonHTML fonts. |
+| `images.class` | Add one or more default classes to Obsidian images. Per-image classes are appended. |
+| `images.width` | Set a default Obsidian image width. A per-image width takes precedence. |
 | `execute` | Run source directives. Execution is off by default. |
 | `force` | Rerun completed source workspaces when execution is enabled. |
 | `timeout` | Stop one source command after this many seconds. The default is 120. |
@@ -366,7 +375,7 @@ that page's build.
 Width values ending in `%`, `px`, `em`, or `rem` become CSS widths. md2html
 treats plain numeric widths as pixels and uses the first unlabelled non-width
 field as alternative text. Use `alt=` and `class=` when explicit names are
-clearer.
+clearer. Set `images.class` or `images.width` for project defaults.
 
 ## Directives
 
@@ -544,8 +553,8 @@ md2html recognizes inline `$...$`, display `$$...$$`, and bare `align`,
 It protects math before Markdown and Liquid rendering. Escaped currency such
 as `\$5` remains text.
 
-The default `mathjax` backend loads browser-side MathJax only on pages that use
-math. Select another backend with `--math` or `math.backend`:
+The default `mathjax-chtml` backend renders static CommonHTML during the build.
+Select any backend with `--math` or `math.backend`:
 
 ```bash
 md2html --math mathjax note.md -o note-browser-mathjax.html
@@ -638,13 +647,14 @@ The example commands do not replace files unless `--force` is present. Pass
 
 ### Template Lookup
 
-For standalone pages, md2html searches the configured `templates` directory,
-then the project `_templates` directory, then the bundled templates. A name
-without an extension receives `.html`.
+For standalone pages, md2html searches the configured `templates` directories
+in order, then the project `_templates` directory, then the bundled templates.
+A name without an extension receives `.html`. Repeat `--templates` to add
+directories on the command line.
 
 Static-site layouts use the same order and also search the source `_layouts`
 directory before the bundled templates. Liquid includes search the configured
-template directory, `_templates`, `_includes`, `_layouts`, and the bundled
+template directories, `_templates`, `_includes`, `_layouts`, and the bundled
 templates.
 
 ### CSS Layers
@@ -665,6 +675,9 @@ md2html --no-feature-css article.md
 # Omit both groups.
 md2html --no-css article.md
 
+# Leave generated CSS readable instead of minifying it.
+md2html --no-minify-css article.md
+
 # Add an external stylesheet link.
 md2html --stylesheet styles/site.css article.md
 ```
@@ -674,6 +687,11 @@ CSS. Use `"css": []` to disable template CSS while keeping feature CSS. Set
 `"feature_css": false` to disable feature CSS too. The corresponding CLI
 options are `--css`, `--no-feature-css`, and `--no-css`. Renderer-required
 CommonHTML CSS is still emitted when static math needs it.
+
+Embedded and generated shared CSS is minified by default. This happens after
+feature selection, so a standalone page first omits unused feature styles and
+then minifies the CSS it retains. Set `"minify_css": false` or pass
+`--no-minify-css` when inspecting generated styles.
 
 Directory builds and `--shared-assets` write common CSS to
 `assets/md2html/page.css` and link to it from each ordinary page. A page with
@@ -714,7 +732,15 @@ Standalone templates receive:
 | `site` | Configured site values and defaults. |
 | `md2html.css` | CSS selected for this page, or an empty value. |
 | `md2html.stylesheets` | Stylesheet hrefs selected for this page. |
-| `md2html.use_mathjax` | True when this page needs browser-side MathJax. |
+| `md2html.jekyll_compatibility` | True only while md2html is directly building a Jekyll source tree. |
+| `md2html.uses_mathjax` | True when this page needs browser-side MathJax. |
+| `md2html.uses_mathjax_chtml` | True when this page contains static CommonHTML math. |
+| `md2html.uses_svg_math` | True when this page contains generated SVG math. |
+| `md2html.uses_mathml` | True when this page contains generated MathML. |
+| `md2html.has_code` | True when this page contains highlighted code or a source box. |
+| `md2html.has_toc` | True when this page contains a generated table of contents. |
+| `md2html.has_images` | True when rendered page content contains an image. |
+| `md2html.has_warnings` | True when rendered page content contains a generated warning. |
 
 The bundled templates show the required Liquid structure for `<title>`, CSS,
 MathJax, the filename header, and rendered content.
@@ -918,6 +944,49 @@ otherwise md2html writes its small Atom feed.
 The compatibility subset does not implement custom collections, `_data`,
 front-matter defaults, Sass conversion, or plugin generators.
 
+### Adapting A Jekyll Layout
+
+Compatibility mode is intended to provide most of a useful preview without
+reimplementing a Jekyll theme, its Sass pipeline, or its plugins. A site may
+need a small compatibility stylesheet for rules normally supplied by its
+theme. For example, an image with HTML `width` and `height` attributes can look
+stretched when the theme's responsive image rule is absent. A compatibility
+stylesheet can restore that rule:
+
+```css
+.post-content img {
+  max-width: 100%;
+  height: auto;
+}
+```
+
+Static CommonHTML, SVG, and MathML contain a hidden LaTeX copy so copied prose
+keeps the equation source. If an existing Jekyll layout also loads browser
+MathJax, MathJax can process that hidden source and show a second, slightly
+offset equation. Either select `math.backend: "mathjax"` and let the layout's
+existing script render the source once, or omit that script when md2html has
+already rendered static math.
+
+Liquid in an HTML layout can add compatibility CSS without changing the Ruby
+Jekyll result. Plain CSS files are copied rather than Liquid-rendered, so put
+the condition around a stylesheet link in the layout:
+
+```liquid
+{% if md2html.jekyll_compatibility %}
+  <link rel="stylesheet" href="/css/md2html-compat.css">
+{% endif %}
+
+{% unless md2html.uses_mathjax_chtml %}
+  <!-- Existing browser MathJax configuration and script. -->
+{% endunless %}
+```
+
+Ruby Jekyll treats the `md2html` values as undefined and therefore keeps the
+existing MathJax script while omitting the compatibility stylesheet. md2html
+adds the stylesheet only in Jekyll compatibility mode and omits browser
+MathJax on pages that already contain static CommonHTML. Similar conditions
+can use `uses_svg_math`, `uses_mathml`, or the other template variables above.
+
 ## Static Files And Exclusions
 
 Directory builds copy static files while preserving their relative paths.
@@ -1008,7 +1077,8 @@ The static-site mode implements pages, dated posts, layouts, includes,
 permalinks, common Liquid expressions and filters, tags, categories, static
 files, and a small Atom feed. It does not run Ruby Jekyll, themes, plugins,
 collections, Sass, or arbitrary Liquid extensions. It does not emit Jekyll
-Markdown as a separate output format.
+Markdown in static-site mode; use the separate `jekyll-markdown` output mode
+when Jekyll should perform the later rendering stages.
 
 Browser-side MathJax requires network access when the page is opened. Static
 CommonHTML requires Node and the installed npm packages while building. SVG

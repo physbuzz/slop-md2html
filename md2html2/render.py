@@ -156,7 +156,6 @@ class TocNode:
 @dataclass
 class Features:
     code: bool = False
-    output: bool = False
     math: bool = False
     math_copy: bool = False
     toc: bool = False
@@ -212,6 +211,58 @@ def _lexer(language: str, filename: Path | None = None):
 
 def code_html(code: str, language: str = "text", filename: Path | None = None) -> str:
     return highlight(code.rstrip("\n") + "\n", _lexer(language, filename), HtmlFormatter(cssclass="codehilite"))
+
+
+def _multiline_math(source: str) -> bool:
+    compact = re.sub(r"\s+", "", source)
+    return "\\\\" in source or any(f"\\begin{{{name}" in compact for name in ("align", "aligned", "gather", "split", "multline"))
+
+
+def _svg_math(source: str, display: bool) -> str:
+    import ziamath
+    from latex2mathml.converter import convert
+
+    svg = ziamath.Math(convert(source, display="block" if display else "inline")).svg()
+    identifiers = sorted(set(re.findall(r'\bid="([^"]+)"', svg)), key=len, reverse=True)
+    prefix = "md2html-math-" + hashlib.sha1(source.encode()).hexdigest()[:10]
+    for identifier in identifiers:
+        replacement = f"{prefix}-{identifier}"
+        svg = svg.replace(f'id="{identifier}"', f'id="{replacement}"')
+        svg = svg.replace(f'href="#{identifier}"', f'href="#{replacement}"')
+        svg = svg.replace(f'xlink:href="#{identifier}"', f'xlink:href="#{replacement}"')
+    match = re.search(r'\bviewBox="([^"]+)"', svg)
+    try:
+        _, minimum_y, _, height = (float(part) for part in match.group(1).split()) if match else (0, 0, 0, 0)
+    except ValueError:
+        minimum_y = height = 0
+    depth = max(0.0, min(1.0, (minimum_y + height) / height)) if height > 0 else .15
+    inline_height = max(1.05, min(1.7, height * .049)) if height > 0 else 1.15
+    display_height = max(1.0, height * (.82 if _multiline_math(source) else .72) / 16) if height > 0 else 1.0
+    style = (
+        f"--md2html-math-svg-depth:{depth:.4f};"
+        f"--md2html-math-svg-inline-height:{inline_height:.4f}em;"
+        f"--md2html-math-svg-inline-align:{-inline_height * depth:.4f}em;"
+        f"--md2html-math-svg-display-height:{display_height:.4f}em"
+    )
+    svg = svg.replace('fill="black"', 'fill="currentColor"').replace('stroke="black"', 'stroke="currentColor"')
+    return re.sub(r"<svg\b", f'<svg class="md2html-math-svg-image" fill="currentColor" style="{style}"', svg, count=1)
+
+
+def _mathml(source: str, display: bool) -> str:
+    from latex2mathml.converter import convert
+
+    markup = convert(source, display="block" if display else "inline")
+    if display:
+        if _multiline_math(source):
+            scale = 1.12
+        elif re.search(r"\\(?:int|iint|iiint|oint|sum|prod)(?![A-Za-z])", source) and ("_" in source or "^" in source):
+            scale = 1.45
+        else:
+            scale = 1.18 if len(re.sub(r"\s+", "", source)) > 140 else 1.12
+        style = f' style="--md2html-mathml-display-scale:{scale:.2f}"'
+    else:
+        style = ""
+    return re.sub(r"<math\b", f'<math class="md2html-mathml"{style}', markup, count=1)
 
 
 def split_args(value: str) -> tuple[str, set[str]]:
@@ -408,8 +459,8 @@ class ContentRenderer:
             dependencies.add(path)
             assets[path] = href
             alt = attributes.get("alt") or Path(name).stem.replace("-", " ").replace("_", " ")
-            classes = "obsidian-image" + (" " + attributes["class"] if attributes.get("class") else "")
-            width = attributes.get("width")
+            classes = " ".join(filter(None, ("obsidian-image", self.settings.images.class_name, attributes.get("class"))))
+            width = attributes.get("width") or self.settings.images.width
             if width and width.isdigit():
                 width += "px"
             width_attr = f' style="width:{html.escape(width, quote=True)}"' if width else ""
@@ -561,7 +612,6 @@ class ContentRenderer:
         if output is None and "execute" in flags and not self.settings.execute:
             executor.warn(f"no cached output for {source}; rerun with --execute")
         if output is not None:
-            features.output = True
             code_markup += f'<div class="code-output">\n<span>Output:</span>\n<pre>{html.escape(output)}</pre>\n</div>\n'
         classes = "code-box inline-source" if inline else "code-box"
         return stash.put(f'<div class="{classes}">\n{code_markup}</div>\n', block=True)
@@ -569,11 +619,11 @@ class ContentRenderer:
     def _protect_math(self, body: str, stash: Stash, features: Features, warnings: list[str]) -> str:
         backend = self.settings.math.backend.lower()
 
-        def rendered_math(markup: str) -> str:
+        def mark_rendered(markup: str) -> str:
             def attributes(match: re.Match[str]) -> str:
                 tag = match.group(0)
-                if re.search(r'\bclass="', tag):
-                    tag = re.sub(r'\bclass="', 'class="math-rendered ', tag, count=1)
+                if 'class="' in tag:
+                    tag = tag.replace('class="', 'class="math-rendered ', 1)
                 else:
                     tag = tag[:-1] + ' class="math-rendered">'
                 return tag[:-1] + ' aria-hidden="true">'
@@ -583,11 +633,9 @@ class ContentRenderer:
             features.math = True
             try:
                 if backend == "mathml":
-                    from latex2mathml.converter import convert
-                    markup = convert(tex)
+                    markup = _mathml(tex, display)
                 elif backend == "svg":
-                    import ziamath
-                    markup = ziamath.Latex(tex, inline=not display).svg()
+                    markup = _svg_math(tex, display)
                 elif backend == "mathjax-chtml":
                     from .mathjax import render_chtml
                     rendered = render_chtml(tex, display)
@@ -605,14 +653,15 @@ class ContentRenderer:
                 warnings.append(f"could not render TeX; leaving source in place: {error}")
                 delimiter = "$$" if display else "$"
                 markup = delimiter + tex + delimiter
-            class_name = "math display-math" if display else "math inline-math"
+            mode = "display" if display else "inline"
+            class_name = f"math {mode}-math math-{backend}"
             tag = "div" if display else "span"
             if backend in {"mathml", "svg", "mathjax-chtml"} and not markup.startswith(("$", "\\")):
                 features.math_copy = True
                 delimiter = "$$" if display else "$"
                 source = html.escape(delimiter + tex + delimiter)
-                markup = f'<span class="math-copy-source">{source}</span>{rendered_math(markup)}'
-            return stash.put(f'<{tag} class="{class_name}" data-tex="{html.escape(tex, quote=True)}">{markup}</{tag}>', block=display)
+                markup = f'<span class="math-copy-source">{source}</span>{mark_rendered(markup)}'
+            return stash.put(f'<{tag} class="{class_name}">{markup}</{tag}>', block=display)
 
         result: list[str] = []
         index = 0

@@ -43,6 +43,50 @@ def syntax_css(light_style: str = "default", dark_style: str = "github-dark") ->
     return light + "\n" + dark + "\n@media (prefers-color-scheme:dark){\n" + automatic + "\n}\n"
 
 
+def minify_css(value: str) -> str:
+    output: list[str] = []
+    quote: str | None = None
+    escaped = pending_space = False
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if quote:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if value.startswith("/*", index):
+            end = value.find("*/", index + 2)
+            index = len(value) if end < 0 else end + 2
+            pending_space = True
+            continue
+        if char in "'\"":
+            if pending_space and output and output[-1] not in "{}:;,> ":
+                output.append(" ")
+            pending_space = False
+            quote = char
+            output.append(char)
+        elif char.isspace():
+            pending_space = True
+        else:
+            if char in "{}:;,>":
+                while output and output[-1] == " ":
+                    output.pop()
+                if char == "}" and output and output[-1] == ";":
+                    output.pop()
+            elif pending_space and output and output[-1] not in "{}:;,> ":
+                output.append(" ")
+            pending_space = False
+            output.append(char)
+        index += 1
+    return "".join(output).strip()
+
+
 @dataclass
 class Page:
     source: Path
@@ -104,7 +148,7 @@ class Project:
         self.bundled_assets = Path(str(files("md2html2").joinpath("assets")))
         self.site = self._site_data()
         template_dirs = [
-            settings.templates,
+            *settings.templates,
             settings.project_root / "_templates",
             self.source_root / "_includes",
             self.source_root / "_layouts",
@@ -465,7 +509,9 @@ class Project:
             rendered.dependencies.add(path)
             metadata, template = parse_frontmatter(path.read_text(encoding="utf-8"))
             try:
-                content = self.liquid.from_string(liquid_source(template)).render(**context, content=content, layout=metadata)
+                content = self.liquid.from_string(liquid_source(template)).render(
+                    **context, content=content, layout=metadata, md2html=self._feature_context(rendered.features),
+                )
             except LiquidError as error:
                 rendered.warnings.append(f"layout failed for {source}: {error}")
                 content += f'<aside class="warning">Layout cycle or error: {html.escape(str(error))}</aside>'
@@ -476,7 +522,7 @@ class Project:
     def _find_template(self, name: str, *, site_layout: bool = False) -> Path | None:
         filename = name if Path(name).suffix else name + ".html"
         candidates = [
-            self.settings.templates / filename if self.settings.templates else None,
+            *(directory / filename for directory in self.settings.templates),
             self.settings.project_root / "_templates" / filename,
             self.source_root / "_layouts" / filename if site_layout else None,
             self.bundled_templates / filename,
@@ -490,7 +536,6 @@ class Project:
             raise ValueError(f"template not found: {name}")
         rendered.dependencies.add(path)
         css = self._css(rendered, path, page)
-        backend = self.settings.math.backend.lower()
         stylesheets = [*self.settings.stylesheets, *self._values(page.get("stylesheets"))]
         if self.settings.shared_assets and "css" not in page and "template" not in page:
             stylesheet = self._output_root() / "assets/md2html/page.css"
@@ -500,9 +545,9 @@ class Project:
             "page": page,
             "content": rendered.content,
             "md2html": {
+                **self._feature_context(rendered.features),
                 "css": css or None,
                 "stylesheets": stylesheets,
-                "use_mathjax": rendered.features.math and backend == "mathjax",
             },
         }
         try:
@@ -510,6 +555,20 @@ class Project:
         except LiquidError as error:
             rendered.warnings.append(f"template failed: {error}")
             return rendered.content + f'<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
+
+    def _feature_context(self, features: Features) -> dict[str, bool]:
+        backend = self.settings.math.backend.lower()
+        return {
+            "jekyll_compatibility": self.settings.jekyll_mode,
+            "uses_mathjax": features.math and backend == "mathjax",
+            "uses_mathjax_chtml": features.math and backend == "mathjax-chtml",
+            "uses_svg_math": features.math and backend == "svg",
+            "uses_mathml": features.math and backend == "mathml",
+            "has_code": features.code,
+            "has_toc": features.toc,
+            "has_images": features.images,
+            "has_warnings": features.warning,
+        }
 
     @staticmethod
     def _values(value: Any) -> list[str]:
@@ -540,7 +599,7 @@ class Project:
         feature_css = bool(page.get("feature_css", self.settings.feature_css)) and not shared
         if feature_css:
             for used, name in (
-                (features.code or features.output, "code"), (features.math, "math"),
+                (features.code, "code"), (features.math, "math"),
                 (features.toc, "toc"), (features.images, "image"), (features.warning, "warning"),
             ):
                 if used:
@@ -553,17 +612,18 @@ class Project:
                 self._track_css(path, rendered.dependencies, value)
             except OSError as error:
                 raise ValueError(f"could not read CSS {path}: {error}") from error
-        if feature_css and (features.code or features.output):
+        if feature_css and features.code:
             values.insert(1 if values else 0, syntax_css(self.settings.highlight_style, self.settings.highlight_dark_style))
         if features.math_css and not (shared and self.settings.input.is_dir()):
             values.append(self._standalone_math_css(features))
-        return "\n".join(values)
+        css = "\n".join(values)
+        return minify_css(css) if self.settings.minify_css else css
 
     def _write_shared_css(self, result: BuildResult) -> None:
         template = self._find_template(self.settings.template)
         if template is None:
             raise ValueError(f"template not found: {self.settings.template}")
-        features = Features(code=True, output=True, math=True, toc=True, images=True, warning=True)
+        features = Features(code=True, math=True, toc=True, images=True, warning=True)
         rendered = Rendered("", "", features)
         css = self._css(rendered, template, {}, shared=False).rstrip() + "\n"
         relative = Path("assets/md2html/page.css")
@@ -650,7 +710,8 @@ class Project:
         relative = Path("assets/md2html/mathjax-chtml.css")
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(css.rstrip() + "\n", encoding="utf-8")
+        css = minify_css(css) if self.settings.minify_css else css.rstrip()
+        target.write_text(css + "\n", encoding="utf-8")
         if target not in result.written:
             result.written.append(target)
         stylesheet = url(target)
