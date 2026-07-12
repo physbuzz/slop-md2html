@@ -12,7 +12,7 @@ from urllib.request import urlopen
 import pytest
 
 from md2html2.cli import WatchGraph, _server, main, parser, settings_from_args, settings_list_from_args
-from md2html2.project import CHTML_CDN, Project
+from md2html2.project import CHTML_CDN, MATHJAX_CDN, Project
 from md2html2.render import parse_frontmatter
 from md2html2.settings import ImageSettings, MathSettings, Settings, find_config, load_settings, normal_path
 
@@ -102,7 +102,7 @@ def test_mathjax_chtml_is_static_and_standalone(tmp_path: Path):
 
 
 @pytest.mark.parametrize("backend, expected, absent", [
-    ("mathjax", "window.__md2htmlMathFonts", "<mjx-container"),
+    ("mathjax", "mathjax@4.1.3/tex-mml-chtml.js", "<mjx-container"),
     ("raw", "$x+1$", "tex-mml-chtml.js"),
 ])
 def test_browser_and_raw_math_backends(tmp_path: Path, backend: str, expected: str, absent: str):
@@ -160,9 +160,9 @@ def test_toc_compacts_exercise_sections(tmp_path: Path):
     assert ".table-of-contents h2" not in output
 
 
-def test_adjacent_blockquotes_share_one_container(tmp_path: Path):
+def test_adjacent_blockquotes_follow_markdown_renderer_output(tmp_path: Path):
     output = build_one(tmp_path, "> First note.\n\n> Second note.\n")
-    assert output.count("<blockquote>") == 1
+    assert output.count("<blockquote>") == 2
     assert output.count("<p>") == 2
 
 
@@ -492,7 +492,13 @@ def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
     (source / "_includes").mkdir()
     (source / "assets").mkdir()
     (source / "_includes" / "head.html").write_text(
-        '<title>{{ page.title }} | {{ site.title }}</title><script>document.documentElement.setAttribute("data-hash-pending", "")</script><script defer src="/site.js"></script>',
+        '<title>{{ page.title }} | {{ site.title }}</title>'
+        '<script>document.documentElement.setAttribute("data-hash-pending", "")</script>'
+        '{% for font in md2html.font_preloads %}<link rel="preload" href="{{ font }}" as="font" type="font/woff2" crossorigin>{% endfor %}'
+        '{% for stylesheet in md2html.stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">{% endfor %}'
+        '{% if md2html.css %}<style>{{ md2html.css }}</style>{% endif %}'
+        '{% if md2html.mathjax_src %}<script>{{ md2html.mathjax_config }}</script><script defer src="{{ md2html.mathjax_src }}"></script>{% endif %}'
+        '<script defer src="/site.js"></script>',
         encoding="utf-8",
     )
     (source / "site.js").write_text("// reader controls\n", encoding="utf-8")
@@ -670,6 +676,31 @@ def test_jekyll_mode_uses_config_conventions_and_shared_features(tmp_path: Path)
     assert not (output / "draft.html").exists()
     assert not (output / "Gemfile").exists()
     assert post in result.page_dependencies
+
+
+def test_jekyll_layout_assets_are_not_discovered_or_rewritten(tmp_path: Path):
+    source, output = tmp_path / "site", tmp_path / "public"
+    (source / "_layouts").mkdir(parents=True)
+    (source / "assets/md2html").mkdir(parents=True)
+    (source / "_layouts/default.html").write_text(
+        '<link rel="stylesheet" href="/theme.css">'
+        '<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>'
+        "{{ content }}",
+    )
+    (source / "theme.css").write_text("body { color: navy; }")
+    (source / "assets/md2html/mathjax.js").write_text("site-owned")
+    (source / "index.md").write_text("---\nlayout: default\n---\n$x+1$\n")
+    settings = Settings(
+        input=source, output=output, output_mode="jekyll", project_root=source,
+        recursive=True, assets="standalone", math=MathSettings("mathjax"),
+    )
+    result = Project(settings).build()
+    page = (output / "index.html").read_text()
+    assert '<link rel="stylesheet" href="/theme.css">' in page
+    assert 'mathjax@3/es5/tex-mml-chtml.js' in page
+    assert MATHJAX_CDN not in page and "<style>body { color: navy; }</style>" not in page
+    assert (output / "assets/md2html/mathjax.js").read_text() == "site-owned"
+    assert not result.warnings
 
 
 def test_jekyll_markdown_preserves_markdown_and_expands_md2html_syntax(tmp_path: Path):
@@ -1230,7 +1261,7 @@ def test_asset_defaults_and_standalone_alias(tmp_path: Path):
 
 
 @pytest.mark.parametrize("assets, marker", [
-    ("standalone", "window.__md2htmlMathFonts"),
+    ("standalone", "https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-mml-chtml.js"),
     ("shared", 'src="assets/md2html/mathjax.js"'),
     ("cdn", "https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-mml-chtml.js"),
 ])
@@ -1242,9 +1273,8 @@ def test_browser_mathjax_asset_modes(tmp_path: Path, assets: str, marker: str):
     page = output.read_text()
     assert marker in page and "<mjx-container" not in page
     if assets == "standalone":
-        assert 'src="https://cdn.jsdelivr.net' not in page and not (tmp_path / "assets").exists()
-        assert "enableSpeech:false" in page and "enableBraille:false" in page
-        assert '"double-struck"' in page and "dynamicFiles).forEach" in page
+        assert not (tmp_path / "assets").exists()
+        assert any("standalone browser MathJax assets are not implemented" in warning for warning in result.warnings)
     elif assets == "shared":
         assert (tmp_path / "assets/md2html/mathjax.js").is_file()
         assert (tmp_path / "assets/md2html/mathjax-newcm-font/chtml/woff2/mjx-ncm-n.woff2").is_file()

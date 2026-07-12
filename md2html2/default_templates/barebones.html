@@ -4,9 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page.title }}</title>
-  {% if md2html.uses_mathjax %}<script>window.MathJax={tex:{inlineMath:[['$','$']],displayMath:[['$$','$$']],processEscapes:true}};</script><script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-mml-chtml.js"></script>{% endif %}
+  {% for font in md2html.font_preloads %}<link rel="preload" href="{{ font }}" as="font" type="font/woff2" crossorigin>{% endfor %}
   {% for stylesheet in md2html.stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">{% endfor %}
   {% if md2html.css %}<style>{{ md2html.css }}</style>{% endif %}
+  {% if md2html.mathjax_src %}<script>{{ md2html.mathjax_config }}</script><script defer src="{{ md2html.mathjax_src }}"></script>{% endif %}
 </head>
 <body><main>{{ content }}</main></body>
 </html>

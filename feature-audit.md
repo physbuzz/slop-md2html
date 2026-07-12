@@ -223,7 +223,7 @@ with maximum gzip compression:
 | Ruby Jekyll reference | 676,833 | 42,640 |
 | Original md2html | 678,056 | 42,796 |
 | Old md2html redesign | 677,745 | 42,714 |
-| md2html2 | 545,158 | 35,576 |
+| md2html2 | 545,194 | 35,577 |
 
 The md2html2 page uses 34,575 bytes of CommonHTML CSS, 5,958 bytes gzipped,
 and a complete 22-file local font set. The page preloads seven font families;

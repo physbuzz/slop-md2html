@@ -8,7 +8,6 @@ from datetime import date, datetime, timezone
 import base64
 import html
 from importlib.resources import files
-import json
 import mimetypes
 import os
 from pathlib import Path
@@ -38,7 +37,6 @@ STYLESHEET = re.compile(r"<link\b(?=[^>]*\brel=(?:['\"][^'\"]*stylesheet[^'\"]*[
 MEDIA_ASSET = re.compile(r"<(?:img|source|video|audio|track|embed|object)\b[^>]*\b(?:src|poster|data)=['\"]([^'\"]+)['\"]", re.IGNORECASE)
 LINK_ASSET = re.compile(r"<link\b(?=[^>]*\bhref=['\"]([^'\"]+)['\"])[^>]*>", re.IGNORECASE)
 SCRIPT_ASSET = re.compile(r"<script\b(?=[^>]*\bsrc=['\"]([^'\"]+)['\"])[^>]*>\s*</script>", re.IGNORECASE)
-MATHJAX_SCRIPT = re.compile(r"<script\b[^>]*\bsrc=['\"][^'\"]*tex-mml-chtml\.js[^'\"]*['\"][^>]*>\s*</script>", re.IGNORECASE)
 
 
 def syntax_css(light_style: str = "default", dark_style: str = "github-dark") -> str:
@@ -198,30 +196,7 @@ class Project:
                     result.skipped.append(target)
                     result.page_dependencies.setdefault(page.source, set()).update(self._content_sources(page, paginator) | self.shared_dependencies)
                     continue
-                rendered = self._render_page(page, output_relative, url, paginator)
-                shared_math = self.settings.asset_mode == "shared"
-                if shared_math and rendered.features.math_css:
-                    stylesheet, fonts = self._write_math_assets(rendered.features, result, target)
-                    tags = [
-                        *(f'  <link rel="preload" href="{font}" as="font" type="font/woff2" crossorigin>' for font in fonts),
-                        f'  <link rel="stylesheet" href="{stylesheet}">',
-                    ]
-                    assets = "\n".join(tags) + "\n"
-                    head_end = rendered.content.find("</head>")
-                    head = rendered.content[:head_end] if head_end >= 0 else rendered.content
-                    external_script = re.search(r"<script\b[^>]*\bsrc\s*=", head, re.IGNORECASE)
-                    if external_script:
-                        line_start = rendered.content.rfind("\n", 0, external_script.start()) + 1
-                        insertion = line_start if rendered.content[line_start:external_script.start()].isspace() else external_script.start()
-                        rendered.content = rendered.content[:insertion] + assets + rendered.content[insertion:]
-                    elif head_end >= 0:
-                        rendered.content = rendered.content[:head_end] + assets + rendered.content[head_end:]
-                    else:
-                        rendered.content = assets + rendered.content
-                self._package_browser_mathjax(rendered, target, result)
-                if self.settings.site_mode and rendered.features.math_css and not shared_math:
-                    css = (self.bundled_assets / "feature-math.css").read_text(encoding="utf-8") + "\n" + self._standalone_math_css(rendered.features)
-                    self._insert_head(rendered, f"<style>{minify_css(css) if self.settings.minify_css else css}</style>\n")
+                rendered = self._render_page(page, output_relative, url, paginator, target, result)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(rendered.content, encoding="utf-8")
                 if self.settings.input.is_file():
@@ -231,7 +206,7 @@ class Project:
                 result.written.append(target)
                 result.warnings.extend(rendered.warnings)
                 result.page_dependencies.setdefault(page.source, set()).update(rendered.dependencies)
-        if only is None and not result.skipped:
+        if only is None and not result.skipped and not (self.settings.jekyll_mode or self.settings.markdown_mode):
             self._prune_math_assets()
             self._prune_browser_mathjax()
             if self.settings.asset_mode != "shared":
@@ -450,7 +425,10 @@ class Project:
         modified = target.stat().st_mtime_ns
         return all(modified >= source.stat().st_mtime_ns for source in self._content_sources(page, paginator))
 
-    def _render_page(self, page: Page, output_relative: Path, url: str, paginator: dict[str, Any] | None) -> Rendered:
+    def _render_page(
+        self, page: Page, output_relative: Path, url: str, paginator: dict[str, Any] | None,
+        target: Path, result: BuildResult,
+    ) -> Rendered:
         self.loader.dependencies.clear()
         page_data = page.data()
         page_data["url"] = url
@@ -465,20 +443,21 @@ class Project:
         )
         page_data["title"] = rendered.title
         page.metadata["title"] = rendered.title
+        md2html = self._renderer_context(rendered, target, result)
         if self.settings.markdown_mode:
             metadata = {**self.settings.frontmatter, **page.metadata}
             content = "---\n" + yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True) + "---\n\n" + rendered.content
         elif self.settings.site_mode:
-            content = self._apply_layouts(rendered.content, page.source, rendered, context)
+            content = self._apply_layouts(rendered.content, page.source, rendered, context, md2html)
         elif markdown:
-            content = self._page_template(rendered, page_data, self._target(page))
+            content = self._page_template(rendered, page_data, target, md2html)
         else:
             content = rendered.content
         rendered.content = content.rstrip() + "\n"
         rendered.dependencies.update(self.loader.dependencies)
         rendered.dependencies.update(self.shared_dependencies)
         rendered.dependencies.update(self._content_sources(page, paginator))
-        if self.settings.asset_mode == "standalone":
+        if self.settings.asset_mode == "standalone" and not self.settings.jekyll_mode:
             rendered.content = self._embed_local_assets(rendered.content, page.source, rendered)
         for pattern in (STYLESHEET, MEDIA_ASSET):
             for href in pattern.findall(rendered.content):
@@ -571,7 +550,9 @@ class Project:
                     directory.rmdir()
             with suppress(OSError):
                 root.rmdir()
-    def _apply_layouts(self, content: str, source: Path, rendered: Rendered, context: dict[str, Any]) -> str:
+    def _apply_layouts(
+        self, content: str, source: Path, rendered: Rendered, context: dict[str, Any], md2html: dict[str, Any],
+    ) -> str:
         page = context["page"]
         layout_name = page.get("layout")
         seen: set[str] = set()
@@ -590,7 +571,7 @@ class Project:
             metadata, template = parse_frontmatter(path.read_text(encoding="utf-8"))
             try:
                 content = self.liquid.from_string(liquid_source(template)).render(
-                    **context, content=content, layout=metadata, md2html=self._feature_context(rendered.features),
+                    **context, content=content, layout=metadata, md2html=md2html,
                 )
             except LiquidError as error:
                 rendered.warnings.append(f"layout failed for {source}: {error}")
@@ -609,7 +590,9 @@ class Project:
         ]
         return next((path for path in candidates if path and path.is_file()), None)
 
-    def _page_template(self, rendered: Rendered, page: dict[str, Any], target: Path) -> str:
+    def _page_template(
+        self, rendered: Rendered, page: dict[str, Any], target: Path, md2html: dict[str, Any],
+    ) -> str:
         name = str(page.get("template") or self.settings.template)
         path = self._find_template(name)
         if path is None:
@@ -620,15 +603,12 @@ class Project:
         if self.settings.asset_mode == "shared" and "css" not in page and "template" not in page:
             stylesheet = self._output_root() / "assets/md2html/page.css"
             stylesheets.append(Path(os.path.relpath(stylesheet, target.parent)).as_posix())
+        stylesheets.extend(md2html["stylesheets"])
         context = {
             "site": self.site,
             "page": page,
             "content": rendered.content,
-            "md2html": {
-                **self._feature_context(rendered.features),
-                "css": css or None,
-                "stylesheets": stylesheets,
-            },
+            "md2html": {**md2html, "css": css or md2html["css"], "stylesheets": stylesheets},
         }
         try:
             return self.liquid.from_string(liquid_source(path.read_text(encoding="utf-8"))).render(**context)
@@ -736,10 +716,29 @@ class Project:
         families = {self._font_family(name) for name in fonts}
         return FONT_FACE.sub(lambda match: match.group(0) if match.group(1) in families else "", features.math_css)
 
-    @staticmethod
-    def _insert_head(rendered: Rendered, value: str) -> None:
-        end = rendered.content.find("</head>")
-        rendered.content = rendered.content[:end] + value + rendered.content[end:] if end >= 0 else value + rendered.content
+    def _renderer_context(self, rendered: Rendered, target: Path, result: BuildResult) -> dict[str, Any]:
+        context: dict[str, Any] = {
+            **self._feature_context(rendered.features),
+            "css": None,
+            "stylesheets": [],
+            "font_preloads": [],
+            "mathjax_config": None,
+            "mathjax_src": None,
+        }
+        if self.settings.jekyll_mode or self.settings.markdown_mode:
+            return context
+        if rendered.features.math_css:
+            if self.settings.asset_mode == "shared":
+                stylesheet, fonts = self._write_math_assets(rendered.features, result, target)
+                context["stylesheets"].append(stylesheet)
+                context["font_preloads"] = fonts
+            elif self.settings.site_mode:
+                css = (self.bundled_assets / "feature-math.css").read_text(encoding="utf-8")
+                css += "\n" + self._standalone_math_css(rendered.features)
+                context["css"] = minify_css(css) if self.settings.minify_css else css
+        if rendered.features.math and self.settings.math.backend == "mathjax":
+            context.update(self._browser_mathjax_context(rendered, target, result))
+        return context
 
     def _npm_asset(self, name: str) -> Path:
         package_root = Path(str(files("md2html2"))).parent
@@ -759,67 +758,38 @@ class Project:
             if path.is_file():
                 self._copy_asset(path, target / path.relative_to(source), result)
 
-    def _standalone_browser_mathjax(self, bundle: Path) -> str:
-        font_root = self._browser_mathjax_fonts()
-        fonts = {
-            path.name: self._data_url(path)
-            for path in sorted((font_root / "woff2").glob("*.woff2"))
-        }
-        marker = 'r.src=r.src.replace(/%%URL%%/,s),t[i]=r'
-        replacement = 'r.src=r.src.replace(/%%URL%%\\/([^\"]+)/,(t,e)=>window.__md2htmlMathFonts[e]||t.replace("%%URL%%",s)),t[i]=r'
-        script = bundle.read_text(encoding="utf-8")
-        if marker not in script:
-            raise ValueError("installed browser MathJax has an unsupported font loader")
-        font_map = (
-            "window.MathJax.options=Object.assign({},window.MathJax.options,{enableMenu:false,enableEnrichment:false,enableSpeech:false,enableBraille:false,enableAssistiveMml:false,menuOptions:{settings:{enrich:false,speech:false,braille:false}}});"
-            "window.__md2htmlMathFonts=" + json.dumps(fonts, separators=(",", ":")) + ";"
-        )
-        dynamic = "".join(path.read_text(encoding="utf-8") for path in sorted((font_root / "dynamic").glob("*.js")))
-        loaded = (
-            'Object.values(MathJax._.output.fonts["mathjax-newcm"].chtml_ts.MathJaxNewcmFont.dynamicFiles)'
-            ".forEach(file=>file.promise=Promise.resolve());"
-        )
-        return font_map + script.replace(marker, replacement) + dynamic + loaded
-
     def _asset_url(self, target: Path, page_target: Path) -> str:
         if self.settings.site_mode:
             base = str(self.site.get("baseurl", "")).rstrip("/")
             return base + "/" + target.relative_to(self._output_root()).as_posix()
         return Path(os.path.relpath(target, page_target.parent)).as_posix()
 
-    def _package_browser_mathjax(self, rendered: Rendered, page_target: Path, result: BuildResult) -> None:
-        if self.settings.math.backend != "mathjax" or not rendered.features.math:
-            return
+    def _browser_mathjax_context(
+        self, rendered: Rendered, page_target: Path, result: BuildResult,
+    ) -> dict[str, str]:
         first = not self.browser_mathjax
         self.browser_mathjax = True
         mode = self.settings.asset_mode
-        if mode == "cdn":
-            script = f'<script id="MathJax-script" async src="{MATHJAX_CDN}"></script>'
-        else:
+        config = "window.MathJax={tex:{inlineMath:[['$','$']],displayMath:[['$$','$$']],processEscapes:true}"
+        if mode == "shared":
             bundle = self._browser_mathjax_bundle()
-            if mode == "standalone":
-                script = '<script id="MathJax-script">' + self._standalone_browser_mathjax(bundle) + "</script>"
-            else:
-                target = self._output_root() / "assets/md2html/mathjax.js"
-                self._copy_asset(bundle, target, result)
-                font_target = self._output_root() / "assets/md2html/mathjax-newcm-font/chtml"
-                if first:
-                    for old in (font_target.parent, self._output_root() / "assets/md2html/sre"):
-                        if old.exists():
-                            shutil.rmtree(old)
-                self._copy_tree(self._browser_mathjax_fonts(), font_target, result)
-                self._copy_tree(bundle.parent / "sre", self._output_root() / "assets/md2html/sre", result)
-                script = f'<script id="MathJax-script" defer src="{self._asset_url(target, page_target)}"></script>'
-                font_root = self._asset_url(font_target.parent.parent, page_target)
-                script = (
-                    f'<script>window.MathJax.loader={{paths:{{fonts:"{font_root}"}}}};'
-                    'window.MathJax.output={fontPath:"[fonts]/%%FONT%%-font"};</script>' + script
-                )
-        if MATHJAX_SCRIPT.search(rendered.content):
-            rendered.content = MATHJAX_SCRIPT.sub(lambda _: script, rendered.content)
+            target = self._output_root() / "assets/md2html/mathjax.js"
+            self._copy_asset(bundle, target, result)
+            font_target = self._output_root() / "assets/md2html/mathjax-newcm-font/chtml"
+            if first:
+                for old in (font_target.parent, self._output_root() / "assets/md2html/sre"):
+                    if old.exists():
+                        shutil.rmtree(old)
+            self._copy_tree(self._browser_mathjax_fonts(), font_target, result)
+            self._copy_tree(bundle.parent / "sre", self._output_root() / "assets/md2html/sre", result)
+            font_root = self._asset_url(font_target.parent.parent, page_target)
+            config += f',loader:{{paths:{{fonts:"{font_root}"}}}},output:{{fontPath:"[fonts]/%%FONT%%-font"}}'
+            source = self._asset_url(target, page_target)
         else:
-            config = "<script>window.MathJax={tex:{inlineMath:[['$','$']],displayMath:[['$$','$$']],processEscapes:true}};</script>"
-            self._insert_head(rendered, config + script + "\n")
+            source = MATHJAX_CDN
+            if mode == "standalone":
+                rendered.warnings.append("standalone browser MathJax assets are not implemented; using the CDN")
+        return {"mathjax_config": config + "};", "mathjax_src": source}
 
     def _prune_browser_mathjax(self) -> None:
         if not self.browser_mathjax or self.settings.asset_mode != "shared":

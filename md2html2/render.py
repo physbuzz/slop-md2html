@@ -46,7 +46,6 @@ MALFORMED_SRC = re.compile(r"^[ \t]*@src\([^\n)]*$", re.MULTILINE)
 TOC = re.compile(r"^[ \t]*@toc[ \t]*$", re.MULTILINE)
 HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
 EXERCISE = re.compile(r"^exercise\b", re.IGNORECASE)
-ADJACENT_BLOCKQUOTES = re.compile(r"</blockquote>\s*<blockquote>")
 ALIGN = re.compile(r"\\begin\{(align\*?|gather\*?|multline\*?|equation\*?)\}.*?\\end\{\1\}", re.DOTALL)
 MATH_COPY_SCRIPT = """<script data-md2html-math-copy>
 (function () {
@@ -128,9 +127,15 @@ def liquid_source(value: str) -> str:
 
 
 class HeadingRenderer(mistune.HTMLRenderer):
-    def __init__(self) -> None:
+    def __init__(self, features: Features | None = None) -> None:
         super().__init__(escape=False)
         self.seen: dict[str, int] = {}
+        self.features = features
+
+    def image(self, text: str, url: str, title: str | None = None) -> str:
+        if self.features:
+            self.features.images = True
+        return super().image(text, url, title)
 
     def heading(self, text: str, level: int, **attrs: Any) -> str:
         base = slugify(text)
@@ -453,6 +458,7 @@ class ContentRenderer:
         body = self._expand_directives(body, source, source, context, stash, features, dependencies, assets, warnings, executor, ())
 
         def obsidian_image(match: re.Match[str]) -> str:
+            features.images = True
             name, attributes = self._image_parts(match.group(1))
             path = self._resolve_reference(name, source)
             href = Path(name)
@@ -481,19 +487,18 @@ class ContentRenderer:
                 body = self.liquid.from_string(liquid_source(body)).render(**context)
             except LiquidError as error:
                 warnings.append(f"template expression failed in {source}: {error}")
+                features.warning = True
                 body += f'\n<aside class="warning">Template cycle or error: {html.escape(str(error))}</aside>'
 
         if output_markdown:
             output = body
         else:
-            renderer = HeadingRenderer()
+            renderer = HeadingRenderer(features)
             md = mistune.create_markdown(renderer=renderer, plugins=["strikethrough", "table", "task_lists", "url"])
-            output = ADJACENT_BLOCKQUOTES.sub("", md(body))
+            output = md(body)
         output = stash.restore(output)
         if features.math_copy:
             output += MATH_COPY_SCRIPT
-        features.images = bool(re.search(r"<img\b", output, re.IGNORECASE))
-        features.warning = 'class="warning"' in output
         title = str(context.get("page", {}).get("title") or source.name)
         return Rendered(output, title, features, dependencies, assets, warnings, executor)
 
@@ -557,11 +562,13 @@ class ContentRenderer:
             if path in stack or path == origin and kind == "include":
                 chain = " -> ".join(str(item) for item in (*stack, path))
                 warnings.append(f"include cycle: {chain}")
+                features.warning = True
                 return stash.put('<aside class="warning">Include cycle omitted.</aside>', block=True)
             try:
                 value = path.read_text(encoding="utf-8")
             except OSError as error:
                 warnings.append(f"could not read {path}: {error}")
+                features.warning = True
                 return stash.put(f'<aside class="warning">Could not read {html.escape(name)}.</aside>', block=True)
             if kind == "include":
                 _, value = parse_frontmatter(value)
