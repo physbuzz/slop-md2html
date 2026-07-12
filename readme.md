@@ -492,10 +492,12 @@ SOURCE_DIRECTORY/.md2html-cache/PAGE_NAME/LANGUAGE-SOURCE_CHECKSUM/
 
 For example, executable blocks in `guide/index.md` use
 `guide/.md2html-cache/index/`. Two pages in one directory receive separate page
-directories. md2html copies inline source into its workspace. File-backed
-source is referenced from that workspace, but its cached output belongs to the
-page containing the directive. Compilers, executables, images, and other files
-made with relative paths remain there and do not pollute the source directory.
+directories. A reference to `mysource.rkt` uses a workspace named
+`rkt-mysource-CHECKSUM`; inline Racket uses `rkt-inline-CHECKSUM`. md2html copies
+inline source into its workspace. File-backed source is referenced from that
+workspace, but its cached output belongs to the page containing the directive.
+Compilers, executables, images, and other files made with relative paths remain
+there and do not pollute the source directory.
 
 The cache key uses the source text. It does not include checkout paths,
 interpreter paths, commands, settings, or md2html metadata. Changing source

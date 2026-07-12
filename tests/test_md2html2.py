@@ -294,6 +294,7 @@ def test_executable_inline_content_uses_a_persistent_workspace(tmp_path: Path):
     assert "code-output" in output and "42" in output
     cached = workspaces(page_cache(tmp_path))
     assert len(cached) == 1
+    assert cached[0].name.startswith("python-inline-")
     assert (cached[0] / "output.txt").read_text() == "42\n"
     assert (cached[0] / ".complete").is_file()
     assert list(cached[0].glob("*.py"))
@@ -353,6 +354,7 @@ def test_file_execution_runs_in_a_stable_clean_workspace(tmp_path: Path):
     cached = workspaces(page_cache(tmp_path))
     assert len(cached) == 1
     workspace = cached[0]
+    assert workspace.name.startswith("py-program-")
     assert workspace.name in output
     assert (workspace / "old-image.txt").read_text() == "old"
     assert not (tmp_path / "old-image.txt").exists()
@@ -483,6 +485,7 @@ def test_source_directory_owns_each_page_cache(tmp_path: Path):
     for name in ("index1", "index2"):
         cached = workspaces(source / ".md2html-cache" / name)
         assert len(cached) == 1
+        assert cached[0].name.startswith("py-mysource-")
         assert (cached[0] / "output.txt").read_text() == "shared output\n"
     assert not (tmp_path / ".md2html-cache").exists()
 

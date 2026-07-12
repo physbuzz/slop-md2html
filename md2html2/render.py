@@ -276,7 +276,8 @@ class Executor:
     def _workspace(self, source: Path, code: str, language: str, inline: bool) -> tuple[Path, str]:
         slug = self._slug(language or "source") if inline else self._slug(source.stem)
         name = self._slug(language or source.suffix.lstrip(".") or "source")
-        builddir = self.cache / f"{name}-{hashlib.sha256(code.encode()).hexdigest()[:12]}"
+        label = "inline" if inline else slug
+        builddir = self.cache / f"{name}-{label}-{hashlib.sha256(code.encode()).hexdigest()[:12]}"
         self.active.add(builddir)
         return builddir, slug
 
