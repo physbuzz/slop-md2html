@@ -53,7 +53,7 @@ code {
   border-radius: 0;
 }
 .code-box .codehilite pre {
-  padding: .2rem 0 .3rem .3rem;
+  padding: .2rem 0 .3rem .45rem;
 }
 .code-header,
 .code-summary,

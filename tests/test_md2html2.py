@@ -178,6 +178,8 @@ def test_highlighted_code_uses_one_box(tmp_path: Path):
     assert '<div class="code-box">' not in output
     assert ".codehilite .k{color:#008000;font-weight:bold}" in output
     assert 'html[data-theme="dark"] .codehilite .k' in output
+    assert ".fenced-code pre{padding:.2rem .45rem .45rem}" in output
+    assert ".code-box .codehilite pre{padding:.2rem 0 .3rem .45rem}" in output
 
 
 def test_fenced_code_labels_normalize_aliases_and_remain_optional(tmp_path: Path):
