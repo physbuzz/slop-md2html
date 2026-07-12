@@ -21,7 +21,7 @@ from watchdog.observers import Observer
 from . import __version__
 from .highlighting import HIGHLIGHTERS, syntax_css
 from .project import BuildResult, Project
-from .settings import ASSET_MODES, EXAMPLE_CONFIG, OUTPUT_MODES, Settings, default_output, find_config, load_settings, normal_path, page_output
+from .settings import ASSET_MODES, EXAMPLE_CONFIG, MATH_BACKENDS, OUTPUT_MODES, Settings, default_output, find_config, load_settings, normal_path, page_output
 
 PAGE_CSS = (
     "page-base.css", "feature-code.css", "feature-math.css",
@@ -48,7 +48,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-o", "--output", type=Path, help="output file or directory")
     result.add_argument("-e", "--execute", action="store_true", help="run executable @src content and show its output")
     result.add_argument("-r", "--recursive", action="store_true", help="render supported documents in subdirectories")
-    result.add_argument("-f", "--force", action="store_true", help="rerun executable content, rebuild unchanged pages, or replace an example file")
+    result.add_argument("-f", "--force", action="store_true", help="rebuild unchanged pages or replace an example file")
+    result.add_argument("-F", "--force-execution", action="store_true", help="rerun executable content; requires --execute")
     result.add_argument("-s", "--serve", action="store_true", help="serve the output and rebuild when source files change")
     result.add_argument("-w", "--watch", action="store_true", help="rebuild when source files change without starting a server")
     result.add_argument("-p", "--port", type=int, default=8000, help="preview server port (default: 8000)")
@@ -69,7 +70,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--highlighter", choices=HIGHLIGHTERS, help="syntax highlighter (default: pygments)")
     result.add_argument("--highlighter-style", help="light syntax-highlighting style")
     result.add_argument("--highlighter-dark-style", help="dark syntax-highlighting style")
-    result.add_argument("--math", choices=("mathjax", "mathjax-chtml", "svg", "mathml", "raw"), help="math rendering backend")
+    result.add_argument("--math", choices=MATH_BACKENDS, help="math rendering backend")
     result.add_argument("--math-fonts", choices=("auto", "all", "inline", "local", "remote", "none"), help="CHTML font asset mode (default: auto)")
     result.add_argument("--timeout", type=float, help="execution timeout in seconds")
     result.add_argument("--clean", action="store_true", help="remove a site output directory before building")
@@ -104,9 +105,11 @@ def _apply_cli(settings: Settings, args: argparse.Namespace) -> Settings:
     for name in ("output_mode", "template", "highlighter", "highlighter_style", "highlighter_dark_style", "assets"):
         if value := getattr(args, name):
             changes[name] = value
-    for name in ("execute", "force", "recursive", "clean"):
+    for name in ("execute", "force", "force_execution", "recursive", "clean"):
         if getattr(args, name):
             changes[name] = True
+    if args.force_execution and not (args.execute or settings.execute):
+        raise ValueError("--force-execution requires --execute")
     if args.templates:
         changes["templates"] = tuple(normal_path(path) for path in args.templates)
     if args.css is not None:

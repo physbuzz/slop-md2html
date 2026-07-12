@@ -47,8 +47,16 @@ md2html --example-css -       # print editable default CSS to stdout
 
 ## Install
 
-md2html 2.0 requires Python 3.10 or newer. Create a virtual environment and
-install the package for development:
+md2html 2.0 requires Python 3.10 or newer. Install a downloaded checkout or
+wheel in a virtual environment:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install /path/to/md2html2
+```
+
+Install an editable checkout with the test dependencies for development:
 
 ```bash
 python3 -m venv .venv
@@ -87,13 +95,16 @@ Rouge defaults to `github.light` and `github.dark`.
 ### Math
 
 Static CommonHTML uses MathJax under Node. Install Node.js, which normally
-includes npm, then install the pinned MathJax packages from the md2html source
-directory:
+includes npm, then install the MathJax packages in the project directory:
 
 ```bash
-npm install
+npm install mathjax@4.1.3 @mathjax/mathjax-tex-font@4.1.3
 md2html --math mathjax-chtml article.md
 ```
+
+md2html searches the project directory and its parents for `node_modules`, so
+the same setup works with an installed wheel and does not depend on a source
+checkout.
 
 Shared browser MathJax also uses those npm packages so it can copy MathJax and
 its fonts into the site, but it does not execute Node. To use browser MathJax
@@ -224,13 +235,16 @@ directory or several input files share local assets below `assets/md2html/` by
 default. Use `--assets` to select another policy. `--standalone` is an alias
 for `--assets standalone`.
 
-`--execute`, `--recursive`, `--force`, and `--serve` have the short forms `-e`,
-`-r`, `-f`, and `-s`, so `-erf` combines the first three. `--watch` rebuilds
+`--execute`, `--recursive`, `--force`, `--force-execution`, and `--serve` have
+the short forms `-e`, `-r`, `-f`, `-F`, and `-s`, so `-erf` combines execution,
+recursion, and a forced page build. `--watch` rebuilds
 without starting a server. `--serve` starts a loopback-only server and also
 rebuilds. Use `-p` or `--port` to change its port.
 
-`--force` reruns cached executable examples when execution is enabled. It also
-allows the starter commands to replace existing files. `--clean` removes a
+`--force` rebuilds pages that an initial watch build would otherwise skip and
+allows starter commands to replace existing files. `--force-execution` bypasses
+completed execution caches and requires `--execute`; use `-eF` to rerun source
+examples. `--clean` removes a
 static site's output directory before building it. It does not apply to
 independent page builds. Run `make clean` to remove packaging output, test
 output, and `.md2html-cache` from the md2html checkout.
@@ -286,6 +300,7 @@ building independent pages.
 
   "execute": false,
   "force": false,
+  "force_execution": false,
   "timeout": 120,
   "commands": {
     "julia": "julia {source}",
@@ -345,7 +360,8 @@ needed.
 | `images.class` | Add one or more default classes to Obsidian images. Per-image classes are appended. |
 | `images.width` | Set a default Obsidian image width. A per-image width takes precedence. |
 | `execute` | Run source directives. Execution is off by default. |
-| `force` | Rerun completed source workspaces when execution is enabled. |
+| `force` | Rebuild pages skipped by the initial watch timestamp check. |
+| `force_execution` | Rerun completed source workspaces. This requires `execute`. |
 | `timeout` | Stop one source command after this many seconds. The default is 120. |
 | `commands` | Add or replace execution commands by language name or file extension without the leading dot. |
 
@@ -401,7 +417,7 @@ Front matter controls both independent pages and site pages:
 | `title` | Set `page.title` and the bundled standalone HTML title. The filename is used when this is absent. |
 | `template` | Select a standalone page template. |
 | `css` | Replace base CSS for this page. Use `[]` to keep only feature CSS. |
-| `stylesheets` | Add stylesheet links for this page. |
+| `stylesheets` | Add stylesheets for this page. Local standalone stylesheets are provided through `md2html.inline_stylesheets`; other values remain links. |
 | `feature_css` | Enable or disable generated feature CSS for this page. |
 | `render_with_liquid` | Set to `false` to leave Liquid expressions in this document unchanged. Templates and layouts still render. |
 | `layout` | Select a static-site layout from `_layouts`. Layouts may select another layout. |
@@ -533,7 +549,7 @@ md2html does not execute source by default. Enable it only for files you trust:
 
 ```bash
 md2html --execute article.md
-md2html --execute --force article.md
+md2html --execute --force-execution article.md
 ```
 
 Python, POSIX shell, JavaScript, Racket, Wolfram Language, C, and C++ have
@@ -551,14 +567,19 @@ For example, executable blocks in `guide/index.md` use
 `guide/.md2html-cache/index/`. Two pages in one directory receive separate page
 directories. A reference to `mysource.rkt` uses a workspace named
 `rkt-mysource-CHECKSUM`; inline Racket uses `rkt-inline-CHECKSUM`. md2html copies
-inline source into its workspace. File-backed source is referenced from that
-workspace, but its cached output belongs to the page containing the directive.
-Compilers, executables, images, and other files made with relative paths remain
-there and do not pollute the source directory.
+inline source into its workspace. File-backed source remains in its original
+location, but its executable and cached output belong to the page containing
+the directive.
+
+Compilation and execution use the containing page's directory as their working
+directory. Programs can therefore read local data and write relative files
+beside the page. `{executable}`, `{output}`, and inline `{source}` point into
+the page-owned workspace. md2html does not publish files made by a program or
+attempt to infer headers, imports, data files, or other undeclared inputs.
 
 The cache key uses the source text. It does not include checkout paths,
 interpreter paths, commands, settings, or md2html metadata. Changing source
-text selects a new workspace. Use `--execute --force` after changing a command,
+text selects a new workspace. Use `--execute --force-execution` after changing a command,
 compiler, runtime, or other external input that should refresh existing output.
 
 md2html saves successful output as `output.txt` and marks it complete. Later
@@ -597,16 +618,16 @@ source. Command strings accept these fields:
 
 | Field | Value |
 | --- | --- |
-| `{source}` | Source path relative to the workspace. |
+| `{source}` | File-backed source path relative to the page directory, or inline source in the workspace. |
 | `{filename}` | Alias for `{source}`. |
-| `{sourcedir}` | Original source directory relative to the workspace. |
-| `{builddir}` | The workspace, written as `.`. |
+| `{sourcedir}` | Original source directory relative to the page directory. |
+| `{builddir}` | Page-owned workspace relative to the page directory. |
 | `{slug}` | Safe source stem or inline language name. |
-| `{executable}` | `./SLUG.md2html-out` inside the workspace. |
+| `{executable}` | `SLUG.md2html-out` inside the workspace. |
 | `{output}` | `output.txt` inside the workspace. |
 | `{python}` | Python interpreter running md2html. |
 
-The command runs through `sh` with the workspace as its working directory. If
+The command runs through `sh` with the page directory as its working directory. If
 it creates `{output}`, md2html reads that file. Otherwise md2html saves the
 command's standard output to `{output}`. Standard error is included in failure
 messages but is not added to successful page output.
@@ -657,7 +678,7 @@ Set `--assets MODE` or the `assets` configuration key:
 
 | Mode | Behavior |
 | --- | --- |
-| `standalone` | Embed generated CSS, CommonHTML fonts, and local authored stylesheets, scripts, and media in every page. |
+| `standalone` | Embed generated CSS, CommonHTML fonts, configured local stylesheets, and local page media in every page. |
 | `shared` | Write reusable renderer assets below `assets/md2html/` and link them from each page. Local site media remains in the output tree. |
 | `cdn` | Use versioned CDN URLs for browser MathJax and CommonHTML fonts. CSS generated by md2html remains inline. |
 
@@ -666,9 +687,11 @@ Set `--assets MODE` or the `assets` configuration key:
 default. `--assets shared` with one input file writes an `assets/md2html/`
 directory beside the output page.
 
-Standalone mode embeds local CSS `@import` files and local `url(...)`
-resources recursively. It also embeds local script and image sources. An
-explicit remote stylesheet, script, image, video, or iframe remains remote;
+Standalone mode embeds configured local stylesheets through the template's
+`md2html.inline_stylesheets` variable. Local CSS `@import` files and
+`url(...)` resources are embedded recursively. Local images and other media in
+the rendered page are embedded in a final media pass. Raw HTML `<link>` and
+`<script>` elements remain unchanged. Remote resources also remain remote;
 md2html does not download arbitrary Internet resources during a build.
 
 Shared browser MathJax copies a minified combined component, its CommonHTML
@@ -839,9 +862,10 @@ then minifies the CSS it retains. Set `"minify_css": false` or pass
 it from each ordinary page. A page with its own `template` or `css` front
 matter embeds its selected CSS instead.
 
-Local CSS files and their local `@import` dependencies are watched.
-Standalone mode embeds local stylesheet links, imports, CSS resources,
-scripts, and media. Shared output keeps reusable files in the output tree.
+Configured local CSS files and their local `@import` dependencies are watched.
+Standalone mode supplies their text through Liquid and embeds CSS resources.
+Shared output keeps reusable files in the output tree. Raw HTML asset elements
+are preserved instead of being rewritten after rendering.
 
 ### Syntax Highlighting
 
@@ -883,6 +907,7 @@ Standalone templates receive:
 | `md2html.math_css` | Generated math renderer CSS, or an empty value. |
 | `md2html.math_stylesheets` | Generated math renderer stylesheet hrefs. |
 | `md2html.font_preloads` | Font hrefs to preload for this page. |
+| `md2html.inline_stylesheets` | Authored local stylesheet text for a standalone template to emit in `<style>` elements. |
 | `md2html.stylesheets` | Authored stylesheet hrefs, emitted last so they can override the preceding layers. |
 | `md2html.mathjax_config` | Browser MathJax configuration JavaScript, or an empty value. |
 | `md2html.mathjax_src` | Browser MathJax script href, or an empty value. |
@@ -902,6 +927,18 @@ stylesheets, selected CSS, math assets, browser MathJax, the filename header,
 and rendered content. Native site layouts receive the same `md2html` values.
 They decide where renderer assets belong; md2html does not search completed
 HTML to insert renderer assets.
+
+Emit configured standalone stylesheets without inspecting or rewriting the
+finished HTML:
+
+```liquid
+{% for stylesheet in md2html.inline_stylesheets %}
+<style>{{ stylesheet }}</style>
+{% endfor %}
+{% for stylesheet in md2html.stylesheets %}
+<link rel="stylesheet" href="{{ stylesheet }}">
+{% endfor %}
+```
 
 The complete removable math block is:
 
@@ -923,8 +960,8 @@ The complete removable math block is:
 
 When a single output stays beside its source, local links already point to the
 source files and md2html does not duplicate them. When `-o` moves that page,
-md2html copies local Obsidian images, Markdown images, HTML image/video sources,
-source files shown by `@src`, and local stylesheet hrefs below the output
+md2html copies local Obsidian images, Markdown images, HTML media, link and
+script sources, source files shown by `@src`, and local stylesheet hrefs below the output
 directory. It preserves the path written in the page. Remote URLs, fragment
 links, data URLs, and `mailto:` links are not copied.
 
@@ -935,8 +972,8 @@ project files, and configured exclusions follow the rules under
 
 The build result records every direct source-to-output asset link. Watch mode
 uses those links to copy changes without rerendering a page. Files made by an
-executable example remain in that example's `.md2html-cache` workspace; md2html
-does not publish them automatically.
+executable example remain relative to the page directory; md2html does not
+publish them automatically.
 
 ## Jekyll Markdown Output
 
@@ -1082,9 +1119,12 @@ the posts on the current page. The other fields are `page`, `per_page`,
 `next_page`, and `next_page_path`. A missing previous or next page has a Liquid
 `nil` value. Posts with `hidden: true` do not appear in `paginator.posts`.
 
-HTML site modes write a small `feed.xml` containing the twenty newest posts. Add a
-source `feed.xml` to replace it with a custom Liquid feed. md2html renders that
-file as XML and does not generate or overwrite it with the fallback feed.
+HTML site modes write a minimal Atom `feed.xml` containing the twenty newest
+posts. It includes the required feed ID, update time, and author. The author
+may be a string or an object with `name`, `email`, and `uri` or `url`; when it
+is absent, the site title is used. Add a source `feed.xml` to replace the
+generated feed with a custom Liquid feed. Front matter is optional for this
+file, and md2html does not generate or overwrite it.
 
 ## Jekyll Compatibility Mode
 
@@ -1127,9 +1167,11 @@ not discover, replace, suppress, or inject layout assets in this mode.
 
 If a layout already loads browser MathJax, select `math.backend: "mathjax"` so
 the layout renders the preserved TeX source. Static CommonHTML, SVG, and MathML
-remain available for sites whose layouts are written to use those forms. The
-feature booleans listed above are available to layouts that deliberately want
-different behavior under md2html, but no compatibility condition is required.
+are not generated in Jekyll compatibility mode because existing layouts do not
+receive the native renderer assets. Selecting one of those backends prints a
+warning and leaves the TeX source in place. The feature booleans listed above
+remain available to layouts that deliberately want different behavior under
+md2html.
 
 ## Static Files And Exclusions
 
@@ -1145,6 +1187,13 @@ copying, so `md2html -r . -o html` does not read `html` again. The build rejects
 an output directory equal to the input. It also rejects `--clean` when the
 input is inside the directory that would be removed.
 
+Before a directory build writes anything, md2html resolves page, pagination,
+feed, and static-file targets. Every target must remain below the configured
+output directory and have one owner. A permalink containing `..` cannot escape
+the output directory, and two sources cannot silently replace the same output.
+An explicit output path for a single-file build is not subject to the site
+containment rule.
+
 ## Watch And Serve
 
 `--watch` performs an initial build, then watches source and dependency
@@ -1154,6 +1203,11 @@ Both commands keep running until interrupted.
 The initial watch build skips a page when its output is at least as new as its
 source. `--force` disables that skip. No execution cache is needed for this
 decision.
+
+`--force-execution` also makes the page pass through the renderer so executable
+directives can be revisited. It requires `--execute` and bypasses completed
+`output.txt` entries. `--force` alone rebuilds HTML while continuing to reuse
+valid execution caches.
 
 The page dependency graph follows Markdown includes, source directives, Liquid
 includes and layouts, templates, selected CSS, and local CSS imports. Rebuilding
@@ -1213,9 +1267,11 @@ timestamp check.
 
 ## Behavior And Limits
 
-Source execution runs local commands through `sh`. Keep execution disabled for
-untrusted Markdown and source files. md2html HTML-escapes cached output before
-adding it to a page.
+Source execution runs local commands through `sh`. This workflow targets
+Unix-like systems with Python, `sh`, and the selected compilers or interpreters
+on `PATH`; Windows users need an environment that provides those conventions.
+Keep execution disabled for untrusted Markdown and source files. md2html
+HTML-escapes cached output before adding it to a page.
 
 The static-site mode implements pages, dated posts, layouts, includes,
 permalinks, common Liquid expressions and filters, tags, categories, static

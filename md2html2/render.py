@@ -26,7 +26,7 @@ from .settings import Settings, normal_path
 
 
 FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
-FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*([^\n]*)\n(.*?)^\1\2[ \t]*$", re.MULTILINE | re.DOTALL)
+FENCE_OPEN = re.compile(r"^( {0,3})(`{3,}|~{3,})[ \t]*([^\r\n]*)$")
 INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)([^\n]*?(?:\n[^\n]*?)?)(?<!`)\1(?!`)")
 RAW_CODE = re.compile(r"<(pre|code)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 RAW_HIGHLIGHT = re.compile(r"<div\b[^>]*class=[\"'][^\"']*(?:codehilite|highlight)[^\"']*[\"'][^>]*>.*?</div>", re.IGNORECASE | re.DOTALL)
@@ -240,6 +240,31 @@ def split_args(value: str) -> tuple[str, set[str]]:
     return (parts[0] if parts else ""), {part.lower() for part in parts[1:] if part}
 
 
+def replace_fences(value: str, replace: Callable[[str, str, str], str]) -> str:
+    """Replace CommonMark fenced blocks before directive preprocessing."""
+    lines = value.splitlines(keepends=True)
+    output: list[str] = []
+    index = 0
+    while index < len(lines):
+        opener = FENCE_OPEN.match(lines[index].rstrip("\r\n"))
+        if not opener or opener.group(2).startswith("`") and "`" in opener.group(3):
+            output.append(lines[index])
+            index += 1
+            continue
+        marker = opener.group(2)[0]
+        minimum = len(opener.group(2))
+        closing = re.compile(rf"^ {{0,3}}{re.escape(marker)}{{{minimum},}}[ \t]*$")
+        end = index + 1
+        while end < len(lines) and not closing.match(lines[end].rstrip("\r\n")):
+            end += 1
+        stop = min(end + 1, len(lines))
+        raw = "".join(lines[index:stop])
+        code = "".join(lines[index + 1:end])
+        output.append(replace(raw, opener.group(3), code))
+        index = stop
+    return "".join(output)
+
+
 class Executor:
     def __init__(self, settings: Settings, page: Path, warn: Callable[[str], None]) -> None:
         self.settings = settings
@@ -272,7 +297,7 @@ class Executor:
         builddir, slug = self._workspace(source, code, language, inline)
         output_path = builddir / "output.txt"
         complete = builddir / ".complete"
-        if use_cache and output_path.is_file() and complete.is_file() and (not self.settings.force or not enabled):
+        if use_cache and output_path.is_file() and complete.is_file() and (not self.settings.force_execution or not enabled):
             return output_path.read_text(encoding="utf-8")
         if not enabled:
             return None
@@ -290,20 +315,20 @@ class Executor:
             executable = builddir / f"{slug}.md2html-out"
 
             def relative(path: Path) -> str:
-                return shlex.quote(os.path.relpath(path, builddir))
+                return shlex.quote(os.path.relpath(path, self.page.parent))
 
             try:
                 formatted = command.format(
                     source=relative(run_source), filename=relative(run_source),
                     python=shlex.quote(sys.executable),
-                    sourcedir=relative(source.parent), builddir=".", slug=shlex.quote(slug),
-                    executable=shlex.quote("./" + os.path.relpath(executable, builddir)), output=relative(output_path),
+                    sourcedir=relative(source.parent), builddir=relative(builddir), slug=shlex.quote(slug),
+                    executable=relative(executable), output=relative(output_path),
                 )
             except (KeyError, ValueError) as error:
                 self.warn(f"invalid execution command for {source}: {error}")
                 return None
             result = subprocess.run(
-                ["sh", "-c", formatted], cwd=builddir, text=True, capture_output=True, timeout=self.settings.timeout,
+                ["sh", "-c", formatted], cwd=self.page.parent, text=True, capture_output=True, timeout=self.settings.timeout,
             )
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}"
@@ -380,17 +405,17 @@ class ContentRenderer:
         body = RAW_HIGHLIGHT.sub(lambda match: stash.put(match.group(0), block=True), body)
         body = RAW_CODE.sub(protect_raw, body)
 
-        def protect_fence(match: re.Match[str]) -> str:
+        def protect_fence(raw: str, info_text: str, code: str) -> str:
             features.code = True
             if output_markdown:
-                return stash.put(match.group(0), block=True)
-            info = match.group(3).strip().split(maxsplit=1)[0] if match.group(3).strip() else ""
+                return stash.put(raw, block=True)
+            info = info_text.strip().split(maxsplit=1)[0] if info_text.strip() else ""
             language = info or "text"
             label = LANGUAGE_ALIASES.get(info.lower(), info.lower()) if info else None
             label = "c++" if label == "cpp" else label
-            return stash.put(fenced_code_html(match.group(4), language, label, self.settings.highlighter), block=True)
+            return stash.put(fenced_code_html(code, language, label, self.settings.highlighter), block=True)
 
-        body = FENCE.sub(protect_fence, body)
+        body = replace_fences(body, protect_fence)
         body = INLINE_CODE.sub(
             lambda match: stash.put(match.group(0) if output_markdown else f"<code>{html.escape(match.group(2).strip())}</code>", block=False),
             body,
@@ -575,6 +600,7 @@ class ContentRenderer:
 
     def _protect_math(self, body: str, stash: Stash, features: Features, warnings: list[str]) -> str:
         backend = self.settings.math.backend.lower()
+        jekyll_static = self.settings.jekyll_mode and backend in {"mathjax-chtml", "svg", "mathml"}
 
         def mark_rendered(markup: str) -> str:
             def attributes(match: re.Match[str]) -> str:
@@ -589,13 +615,19 @@ class ContentRenderer:
         def emit(tex: str, display: bool) -> str:
             features.math = True
             try:
-                if backend == "mathml":
+                if jekyll_static:
+                    delimiter = "$$" if display else "$"
+                    markup = delimiter + tex + delimiter
+                    warning = f"{backend} rendering is unavailable in Jekyll compatibility mode; leaving TeX source in place"
+                    if warning not in warnings:
+                        warnings.append(warning)
+                elif backend == "mathml":
                     markup = _mathml(tex, display)
                 elif backend == "svg":
                     markup = _svg_math(tex, display)
                 elif backend == "mathjax-chtml":
                     from .mathjax import render_chtml
-                    rendered = render_chtml(tex, display)
+                    rendered = render_chtml(tex, display, self.settings.project_root)
                     markup = rendered.html
                     features.math_css = rendered.css
                     features.math_font_dir = rendered.font_dir
@@ -613,7 +645,7 @@ class ContentRenderer:
                 delimiter = "$$" if display else "$"
                 markup = delimiter + tex + delimiter
             mode = "display" if display else "inline"
-            class_name = f"math {mode}-math math-{backend}"
+            class_name = f"math {mode}-math math-{'raw' if jekyll_static else backend}"
             tag = "div" if display else "span"
             if backend in {"mathml", "svg", "mathjax-chtml"} and not markup.startswith(("$", "\\")):
                 features.math_copy = True

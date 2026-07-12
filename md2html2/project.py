@@ -14,13 +14,14 @@ from pathlib import Path
 import re
 import shutil
 from typing import Any
+import xml.etree.ElementTree as ET
 
 from liquid.exceptions import LiquidError
 import yaml
 
 from .highlighting import syntax_css, validate_styles
 from .render import FRONTMATTER, ContentRenderer, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
-from .settings import MARKDOWN_SUFFIXES, PAGE_SUFFIXES, Settings, atomic_write, normal_path, page_output
+from .settings import MARKDOWN_SUFFIXES, MATH_BACKENDS, PAGE_SUFFIXES, Settings, atomic_write, normal_path, page_output
 
 
 PROJECT_FILES = {"md2html.json"}
@@ -136,6 +137,10 @@ class Project:
     """A complete build, whether it contains one page or a native site."""
 
     def __init__(self, settings: Settings) -> None:
+        if settings.force_execution and not settings.execute:
+            raise ValueError("force_execution requires execute")
+        if settings.math.backend not in MATH_BACKENDS:
+            raise ValueError("math backend must be " + ", ".join(MATH_BACKENDS))
         validate_styles(settings.highlighter, settings.highlighter_style, settings.highlighter_dark_style)
         self.settings = settings
         self.source_root = settings.input if settings.input.is_dir() else settings.input.parent
@@ -159,16 +164,18 @@ class Project:
         self.shared_dependencies: set[Path] = set()
         self.post_sources: set[Path] = set()
         self.ignored_sources: set[Path] = set()
+        self.output_owners: dict[Path, str] = {}
 
     def build(self, only: set[Path] | None = None, *, skip_unchanged: bool = False) -> BuildResult:
         self._validate_paths()
         result = BuildResult()
         pages = self._discover_pages()
         self._populate_site(pages)
+        self._plan_outputs(pages, include_static=only is None)
         wanted = None if only is None else {path.absolute() for path in only}
         selected = pages if wanted is None else [page for page in pages if page.source.absolute() in wanted]
         if skip_unchanged and self.settings.shared_math_assets and any(
-            self.settings.force or not self._current(self._target(page, output), page, paginator)
+            self.settings.force or self.settings.force_execution or not self._current(self._target(page, output), page, paginator)
             for page in selected for output, _, paginator in self._page_outputs(page)
         ):
             skip_unchanged = False
@@ -182,7 +189,7 @@ class Project:
                 if page.source.absolute() == target.absolute():
                     result.warnings.append(f"skipping {page.source}: source and output are the same file")
                     continue
-                if skip_unchanged and not self.settings.force and self._current(target, page, paginator):
+                if skip_unchanged and not (self.settings.force or self.settings.force_execution) and self._current(target, page, paginator):
                     result.skipped.append(target)
                     result.page_dependencies.setdefault(page.source, set()).update(self._content_sources(page, paginator) | self.shared_dependencies)
                     continue
@@ -217,6 +224,26 @@ class Project:
                 raise ValueError("site output cannot be the input directory")
             if self.settings.clean and source.is_relative_to(output):
                 raise ValueError("clean site output cannot contain the input directory")
+
+    def _claim_output(self, target: Path, owner: str) -> None:
+        target = target.resolve()
+        if self.settings.input.is_dir() and not target.is_relative_to(self.settings.output.resolve()):
+            raise ValueError(f"output path escapes {self.settings.output}: {target}")
+        previous = self.output_owners.get(target)
+        if previous is not None and previous != owner:
+            raise ValueError(f"output path {target} is produced by both {previous} and {owner}")
+        self.output_owners[target] = owner
+
+    def _plan_outputs(self, pages: list[Page], *, include_static: bool) -> None:
+        self.output_owners.clear()
+        for page in pages:
+            for output, url, _ in self._page_outputs(page):
+                self._claim_output(self._target(page, output), f"page {page.source} ({url})")
+        if include_static:
+            for source, target in self._static_outputs(pages):
+                self._claim_output(target, f"static file {source}")
+        if self.settings.site_mode and not any(page.output_relative == Path("feed.xml") for page in pages):
+            self._claim_output(self.settings.output / "feed.xml", "generated Atom feed")
 
     def _site_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
@@ -258,7 +285,7 @@ class Project:
                 text = path.read_text(encoding="utf-8")
                 metadata, body = parse_frontmatter(text)
                 post = relative.parts[:1] == ("_posts",)
-                if self.settings.jekyll_mode and not post and not FRONTMATTER.match(text):
+                if self.settings.jekyll_mode and not post and relative != Path("feed.xml") and not FRONTMATTER.match(text):
                     continue
                 if self.settings.jekyll_mode and metadata.get("published", True) is False:
                     self.ignored_sources.add(path)
@@ -432,7 +459,14 @@ class Project:
         context["content"] = rendered.content
         context["md2html"] = self._renderer_context(rendered, target, result)
         if not (self.settings.jekyll_mode or self.settings.markdown_mode):
-            context["md2html"]["stylesheets"] = [*self.settings.stylesheets, *self._values(page_data.get("stylesheets"))]
+            stylesheets = [*self.settings.stylesheets, *self._values(page_data.get("stylesheets"))]
+            for stylesheet in stylesheets:
+                path = self._local_asset(stylesheet, page.source)
+                if self.settings.asset_mode == "standalone" and path:
+                    css = self._embedded_css(path, rendered)
+                    context["md2html"]["inline_stylesheets"].append(minify_css(css) if self.settings.minify_css else css)
+                else:
+                    context["md2html"]["stylesheets"].append(stylesheet)
         content = rendered.content
         if self.settings.markdown_mode:
             metadata = {**self.settings.frontmatter, **page.metadata}
@@ -447,7 +481,7 @@ class Project:
         rendered.dependencies.update(self._content_sources(page, paginator))
         if self.settings.asset_mode == "standalone" and not self.settings.jekyll_mode:
             rendered.content = self._embed_local_assets(rendered.content, page.source, rendered)
-        for pattern in (STYLESHEET, MEDIA_ASSET):
+        for pattern in (STYLESHEET, LINK_ASSET, SCRIPT_ASSET, MEDIA_ASSET):
             for href in pattern.findall(rendered.content):
                 name = href.split("?", 1)[0].split("#", 1)[0]
                 if name and "://" not in name and not name.startswith(("//", "data:", "mailto:")):
@@ -498,18 +532,6 @@ class Project:
         return CSS_URL.sub(resource, CSS_IMPORT_RULE.sub(include, value))
 
     def _embed_local_assets(self, content: str, source: Path, rendered: Rendered) -> str:
-        def stylesheet(match: re.Match[str]) -> str:
-            path = self._local_asset(match.group(1), source)
-            return f"<style>{self._embedded_css(path, rendered)}</style>" if path else match.group(0)
-
-        def script(match: re.Match[str]) -> str:
-            path = self._local_asset(match.group(1), source)
-            if not path:
-                return match.group(0)
-            rendered.dependencies.add(path)
-            value = path.read_text(encoding="utf-8").replace("</script", "<\\/script")
-            return f"<script>{value}</script>"
-
         def media(match: re.Match[str]) -> str:
             path = self._local_asset(match.group(1), source)
             if not path:
@@ -517,9 +539,7 @@ class Project:
             rendered.dependencies.add(path)
             return match.group(0).replace(match.group(1), self._data_url(path), 1)
 
-        value = STYLESHEET.sub(stylesheet, content)
-        value = LINK_ASSET.sub(media, value)
-        return MEDIA_ASSET.sub(media, SCRIPT_ASSET.sub(script, value))
+        return MEDIA_ASSET.sub(media, content)
 
     def _apply_layouts(self, source: Path, rendered: Rendered, context: dict[str, Any]) -> str:
         page = context["page"]
@@ -693,6 +713,7 @@ class Project:
             "css": None,
             "page_stylesheets": [],
             "stylesheets": [],
+            "inline_stylesheets": [],
             "math_css": None,
             "math_stylesheets": [],
             "font_preloads": [],
@@ -854,7 +875,12 @@ class Project:
             self._copy_asset(source, normal_path(page_target.parent / relative), result)
 
     def _copy_static(self, pages: list[Page], result: BuildResult) -> None:
+        for source, target in self._static_outputs(pages):
+            self._copy_asset(source, target, result)
+
+    def _static_outputs(self, pages: list[Page]) -> list[tuple[Path, Path]]:
         page_sources = {page.source for page in pages}
+        outputs = []
         for source in sorted(self.source_root.rglob("*")):
             if not source.is_file() or source in page_sources or source in self.ignored_sources or source.is_relative_to(self.settings.output):
                 continue
@@ -871,22 +897,47 @@ class Project:
             target = self.settings.output / relative
             if source.absolute() == target.absolute():
                 continue
-            self._copy_asset(source, target, result)
+            outputs.append((source, target))
+        return outputs
 
     def _write_feed(self, pages: list[Page], result: BuildResult) -> None:
         target = self.settings.output / "feed.xml"
-        if target.exists() and any(page.output_relative == Path("feed.xml") for page in pages):
+        if any(page.output_relative == Path("feed.xml") for page in pages):
             return
         posts = [page for page in pages if page.relative.parts and page.relative.parts[0] == "_posts"]
         posts.sort(key=self._date, reverse=True)
         root_url = str(self.site.get("url", "")).rstrip("/") + str(self.site.get("baseurl", "")).rstrip("/")
-        entries = []
+        atom = "http://www.w3.org/2005/Atom"
+        ET.register_namespace("", atom)
+        feed = ET.Element(f"{{{atom}}}feed")
+
+        def element(parent: ET.Element, name: str, value: Any = None, **attributes: str) -> ET.Element:
+            child = ET.SubElement(parent, f"{{{atom}}}{name}", attributes)
+            if value is not None:
+                child.text = str(value)
+            return child
+
+        element(feed, "title", self.site.get("title", ""))
+        feed_url = root_url + "/feed.xml"
+        element(feed, "link", href=feed_url, rel="self")
+        element(feed, "id", feed_url)
+        element(feed, "updated", self._date(posts[0]).isoformat() if posts else self.site["time"].isoformat())
+        author_value = self.site.get("author") or {}
+        author_data = author_value if isinstance(author_value, dict) else {"name": author_value}
+        author = element(feed, "author")
+        element(author, "name", author_data.get("name") or self.site.get("title", ""))
+        for field in ("email", "uri"):
+            value = author_data.get(field) or (author_data.get("url") if field == "uri" else None)
+            if value:
+                element(author, field, value)
         for post in posts[:20]:
             data = post.data()
-            title = html.escape(str(data.get("title", post.source.stem)))
             url = root_url + post.url
-            entries.append(f'<entry><title>{title}</title><link href="{html.escape(url)}"/><id>{html.escape(url)}</id><updated>{self._date(post).isoformat()}</updated></entry>')
-        feed = f'<?xml version="1.0" encoding="utf-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom"><title>{html.escape(str(self.site.get("title", "")))}</title>{"".join(entries)}</feed>\n'
+            entry = element(feed, "entry")
+            element(entry, "title", data.get("title", post.source.stem))
+            element(entry, "link", href=url)
+            element(entry, "id", url)
+            element(entry, "updated", self._date(post).isoformat())
         target.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(target, feed)
+        atomic_write(target, ET.tostring(feed, encoding="unicode", xml_declaration=True) + "\n")
         result.written.append(target)

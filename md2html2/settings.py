@@ -15,6 +15,7 @@ PAGE_SUFFIXES = MARKDOWN_SUFFIXES | LIQUID_SUFFIXES
 OUTPUT_MODES = ("pages", "site", "jekyll", "jekyll-markdown")
 SITE_MODES = {"site", "jekyll"}
 ASSET_MODES = ("shared", "standalone", "cdn")
+MATH_BACKENDS = ("mathjax", "mathjax-chtml", "svg", "mathml", "raw")
 
 
 def normal_path(path: Path) -> Path:
@@ -66,6 +67,7 @@ class Settings:
     execute: bool = False
     timeout: float = 120.0
     force: bool = False
+    force_execution: bool = False
     recursive: bool = False
     clean: bool = False
     exclude: tuple[str, ...] = ()
@@ -156,11 +158,22 @@ def load_settings(config_path: Path) -> Settings:
             raise ValueError(f"{name} must be a path or a list of paths{ending}")
         return value
 
+    def mapping_value(name: str) -> dict[str, Any]:
+        value = raw.get(name, {})
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError(f"{name} must contain an object")
+        return value
+
     math_value = raw.get("math", {})
     if isinstance(math_value, str):
         math_value = {"backend": math_value}
     if not isinstance(math_value, dict):
         raise ValueError("math must be a backend name or an object")
+    math_backend = str(math_value.get("backend", "mathjax-chtml"))
+    if math_backend not in MATH_BACKENDS:
+        raise ValueError("math.backend must be " + ", ".join(MATH_BACKENDS))
     font_mode = str(math_value.get("chtml_fonts", "auto"))
     if font_mode not in {"auto", "all", "inline", "local", "remote", "none"}:
         raise ValueError("math.chtml_fonts must be auto, all, inline, local, remote, or none")
@@ -171,12 +184,15 @@ def load_settings(config_path: Path) -> Settings:
     template_paths = tuple(rooted(value) for value in templates)
     css = list_value("css", nullable=True)
     stylesheets = list_value("stylesheets")
-    frontmatter = raw.get("frontmatter") or {}
-    if not isinstance(frontmatter, dict):
-        raise ValueError("frontmatter must contain an object")
-    images = raw.get("images", {}) or {}
-    if not isinstance(images, dict):
-        raise ValueError("images must contain an object")
+    frontmatter = mapping_value("frontmatter")
+    images = mapping_value("images")
+    commands = mapping_value("commands")
+    site = mapping_value("site")
+    exclude = raw.get("exclude", ())
+    if isinstance(exclude, str):
+        exclude = (exclude,)
+    elif not isinstance(exclude, (list, tuple)):
+        raise ValueError("exclude must be a path or a list of paths")
     timeout = float(raw.get("timeout", 120))
     if timeout <= 0:
         raise ValueError("timeout must be greater than zero")
@@ -185,10 +201,10 @@ def load_settings(config_path: Path) -> Settings:
         raise ValueError("output_mode must be " + ", ".join(OUTPUT_MODES))
     reserved = {
         "input", "output", "output_mode", "templates", "template", "css", "stylesheets",
-        "feature_css", "minify_css", "parse_liquid", "assets", "math", "images", "execute", "timeout", "force", "recursive", "clean",
+        "feature_css", "minify_css", "parse_liquid", "assets", "math", "images", "execute", "timeout", "force", "force_execution", "recursive", "clean",
         "exclude", "frontmatter", "commands", "highlighter", "highlighter_style", "highlighter_dark_style", "site",
     }
-    site_data = dict(raw.get("site") or {})
+    site_data = dict(site)
     site_data.update({key: value for key, value in raw.items() if key not in reserved})
     return Settings(
         input=path_value("input", "."),
@@ -203,7 +219,7 @@ def load_settings(config_path: Path) -> Settings:
         minify_css=bool(raw.get("minify_css", True)),
         parse_liquid=bool(raw.get("parse_liquid", True)),
         assets=assets,
-        math=MathSettings(backend=str(math_value.get("backend", "mathjax-chtml")), chtml_fonts=font_mode),
+        math=MathSettings(backend=math_backend, chtml_fonts=font_mode),
         images=ImageSettings(
             class_name=str(images["class"]) if images.get("class") is not None else None,
             width=str(images["width"]) if images.get("width") is not None else None,
@@ -211,12 +227,13 @@ def load_settings(config_path: Path) -> Settings:
         execute=bool(raw.get("execute", False)),
         timeout=timeout,
         force=bool(raw.get("force", False)),
+        force_execution=bool(raw.get("force_execution", False)),
         recursive=bool(raw.get("recursive", mode != "pages")),
         clean=bool(raw.get("clean", False)),
-        exclude=tuple(str(item) for item in raw.get("exclude", ())),
+        exclude=tuple(str(item) for item in exclude),
         frontmatter=dict(frontmatter),
         site_data=site_data,
-        commands={str(key): str(value) for key, value in (raw.get("commands") or {}).items()},
+        commands={str(key): str(value) for key, value in commands.items()},
         highlighter=str(raw.get("highlighter", "pygments")),
         highlighter_style=str(raw["highlighter_style"]) if raw.get("highlighter_style") is not None else None,
         highlighter_dark_style=str(raw["highlighter_dark_style"]) if raw.get("highlighter_dark_style") is not None else None,

@@ -1,5 +1,7 @@
 import readline from 'node:readline';
-import {fileURLToPath} from 'node:url';
+import {createRequire} from 'node:module';
+import path from 'node:path';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 
 const FONT_URL = 'mathjax/woff2';
 
@@ -10,7 +12,9 @@ function message(error) {
 let MathJax;
 let adaptor;
 try {
-  MathJax = (await import('mathjax')).default;
+  const nodeModules = path.resolve(process.argv[2]);
+  const require = createRequire(pathToFileURL(path.join(nodeModules, 'package.json')));
+  MathJax = (await import(pathToFileURL(require.resolve('mathjax')).href)).default;
   await MathJax.init({
     loader: {
       load: ['input/tex', 'output/chtml', '[mathjax-tex]/chtml'],
@@ -19,7 +23,7 @@ try {
     chtml: {fontURL: FONT_URL, linebreaks: {inline: false}, scale: 1.195}
   });
   adaptor = MathJax.startup.adaptor;
-  const fontFile = await import.meta.resolve('@mathjax/mathjax-tex-font/chtml/woff2/mjx-tex-n.woff2');
+  const fontFile = pathToFileURL(require.resolve('@mathjax/mathjax-tex-font/chtml/woff2/mjx-tex-n.woff2'));
   console.log(JSON.stringify({
     ready: true,
     css: adaptor.outerHTML(MathJax.chtmlStylesheet()),

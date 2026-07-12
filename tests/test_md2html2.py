@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from urllib.request import urlopen
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -53,6 +54,40 @@ def test_single_file_writes_only_sibling_html(tmp_path: Path):
     assert "--reader-text-size:.9rem" in output
     assert 'html[data-text="small"]{--reader-text-size:.8rem}' in output
     assert 'html[data-text="large"]{--reader-text-size:1rem}' in output
+
+
+def test_site_outputs_are_contained_and_have_one_owner(tmp_path: Path):
+    source, output = tmp_path / "content", tmp_path / "public"
+    source.mkdir()
+    (source / "escape.md").write_text("---\npermalink: /../escaped.html\n---\nNope\n")
+    settings = Settings(input=source, output=output, output_mode="site", project_root=source)
+    with pytest.raises(ValueError, match="output path escapes"):
+        Project(settings).build()
+    assert not (tmp_path / "escaped.html").exists()
+
+    (source / "escape.md").unlink()
+    for name in ("one.md", "two.md"):
+        (source / name).write_text("---\npermalink: /same.html\n---\nSame\n")
+    with pytest.raises(ValueError, match="is produced by both"):
+        Project(settings).build()
+    assert not (output / "same.html").exists()
+
+    for path in source.glob("*.md"):
+        path.unlink()
+    (source / "page.md").write_text("---\npermalink: /asset.txt\n---\nGenerated\n")
+    (source / "asset.txt").write_text("Static\n")
+    with pytest.raises(ValueError, match="static file"):
+        Project(settings).build()
+
+
+def test_longer_markdown_fence_shields_directives_and_math(tmp_path: Path):
+    output = build_one(
+        tmp_path,
+        "```text\n@src(missing.py, execute)\n$x$\n````\n",
+        execute=True,
+    )
+    assert "@src(missing.py, execute)" in output and "$x$" in output
+    assert "no cached output" not in output and "mjx-container" not in output
 
 
 def test_frontmatter_title_and_yaml_types(tmp_path: Path):
@@ -369,9 +404,8 @@ def test_file_execution_runs_in_a_stable_clean_workspace(tmp_path: Path):
     assert len(cached) == 1
     workspace = cached[0]
     assert workspace.name.startswith("py-program-")
-    assert workspace.name in output
-    assert (workspace / "old-image.txt").read_text() == "old"
-    assert not (tmp_path / "old-image.txt").exists()
+    assert tmp_path.name in output
+    assert (tmp_path / "old-image.txt").read_text() == "old"
 
     (workspace / "cache-hit.txt").write_text("preserved", encoding="utf-8")
     build_one(tmp_path, "# Run\n\n@src(program.py, execute)\n", execute=True)
@@ -386,12 +420,12 @@ def test_file_execution_runs_in_a_stable_clean_workspace(tmp_path: Path):
     assert len(changed) == 1 and changed[0] != workspace
     assert "changed" in output
     assert not workspace.exists()
-    assert (changed[0] / "new-image.txt").read_text() == "new"
+    assert (tmp_path / "new-image.txt").read_text() == "new"
 
 
 def test_custom_command_can_write_output_and_inspect_workspace(tmp_path: Path):
     (tmp_path / "example.demo").write_text("ignored\n", encoding="utf-8")
-    command = "printf '%s' {slug} > {output}; printf '%s' {builddir} > workspace.txt; printf '%s' {sourcedir} > sourcedir.txt"
+    command = "printf '%s' {slug} > {output}; printf '%s' {builddir} > {builddir}/workspace.txt; printf '%s' {sourcedir} > {builddir}/sourcedir.txt"
     output = build_one(
         tmp_path, "# Run\n\n@src(example.demo, execute)\n", execute=True,
         commands={"demo": command},
@@ -399,17 +433,21 @@ def test_custom_command_can_write_output_and_inspect_workspace(tmp_path: Path):
     workspace = workspaces(page_cache(tmp_path))[0]
     assert "example" in output
     assert (workspace / "output.txt").read_text() == "example"
-    assert (workspace / "workspace.txt").read_text() == "."
-    assert normal_path(workspace / (workspace / "sourcedir.txt").read_text()) == tmp_path
+    assert normal_path(tmp_path / (workspace / "workspace.txt").read_text()) == workspace
+    assert normal_path(tmp_path / (workspace / "sourcedir.txt").read_text()) == tmp_path
     assert not (tmp_path / "example.out").exists()
 
 
-def test_force_refreshes_cached_output_when_execution_is_enabled(tmp_path: Path):
+def test_force_execution_refreshes_cached_output_but_force_does_not(tmp_path: Path):
     (tmp_path / "example.demo").write_text("source\n", encoding="utf-8")
     page = "@src(example.demo, execute)\n"
     build_one(tmp_path, page, execute=True, commands={"demo": "printf old > {output}"})
-    output = build_one(
+    rebuilt = build_one(
         tmp_path, page, execute=True, force=True, commands={"demo": "printf new > {output}"},
+    )
+    assert '<div class="code-output">\n<span>Output:</span>\n<pre>old</pre>' in rebuilt
+    output = build_one(
+        tmp_path, page, execute=True, force_execution=True, commands={"demo": "printf new > {output}"},
     )
     assert '<div class="code-output">\n<span>Output:</span>\n<pre>new</pre>' in output
 
@@ -480,7 +518,7 @@ def test_failed_execution_still_prunes_stale_workspaces_for_that_page(tmp_path: 
     remaining = workspaces(cache)
     assert len(remaining) == 1 and remaining != original
     assert not original[0].exists()
-    assert (remaining[0] / "failed.txt").is_file()
+    assert (tmp_path / "failed.txt").is_file()
 
 
 def test_source_directory_owns_each_page_cache(tmp_path: Path):
@@ -504,6 +542,22 @@ def test_source_directory_owns_each_page_cache(tmp_path: Path):
     assert not (tmp_path / ".md2html-cache").exists()
 
 
+def test_external_source_runs_from_page_directory_but_uses_page_cache(tmp_path: Path):
+    page_directory = tmp_path / "a"
+    page_directory.mkdir()
+    (tmp_path / "other.py").write_text(
+        "from pathlib import Path\nPath('made-by-program.txt').write_text(Path.cwd().name)\nprint('external output')\n"
+    )
+    page = page_directory / "index.md"
+    page.write_text("@src(../other.py, execute)\n")
+    result = Project(Settings.single(page).with_cli(execute=True)).build()
+    workspace = workspaces(page_directory / ".md2html-cache/index")[0]
+    assert workspace.name.startswith("py-other-")
+    assert (workspace / "output.txt").read_text() == "external output\n"
+    assert (page_directory / "made-by-program.txt").read_text() == "a"
+    assert "external output" in result.written[0].read_text()
+
+
 def test_deleted_page_cache_waits_for_explicit_cleanup(tmp_path: Path):
     source = tmp_path / "content"
     output = tmp_path / "public"
@@ -522,8 +576,8 @@ def test_deleted_page_cache_waits_for_explicit_cleanup(tmp_path: Path):
     assert len(result.warnings) == 2
     guide = page_cache(source, "guide/index.md")
     reference = page_cache(source, "reference/index.md")
-    assert (workspaces(guide)[0] / "failed.txt").is_file()
-    assert (workspaces(reference)[0] / "failed.txt").is_file()
+    assert (source / "guide/failed.txt").is_file()
+    assert (source / "reference/failed.txt").is_file()
 
     (source / "reference" / "index.md").unlink()
     result = Project(settings).build()
@@ -576,6 +630,7 @@ def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
         '{% if md2html.css %}<style>{{ md2html.css }}</style>{% endif %}'
         '{% for stylesheet in md2html.math_stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">{% endfor %}'
         '{% if md2html.math_css %}<style>{{ md2html.math_css }}</style>{% endif %}'
+        '{% for stylesheet in md2html.inline_stylesheets %}<style>{{ stylesheet }}</style>{% endfor %}'
         '{% for stylesheet in md2html.stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">{% endfor %}'
         '{% if md2html.mathjax_src %}<script>{{ md2html.mathjax_config }}</script><script defer src="{{ md2html.mathjax_src }}"></script>{% endif %}'
         '<script defer src="/site.js"></script>',
@@ -621,6 +676,12 @@ def test_native_site_model_layouts_includes_assets_and_dated_urls(tmp_path: Path
     result = Project(settings).build()
     post = output / "2026/05/18/gaussianintegral.html"
     assert post in result.written
+    atom = {"atom": "http://www.w3.org/2005/Atom"}
+    feed = ET.parse(output / "feed.xml").getroot()
+    assert feed.findtext("atom:id", namespaces=atom) == "https://example.test/feed.xml"
+    assert feed.findtext("atom:updated", namespaces=atom)
+    assert feed.findtext("atom:author/atom:name", namespaces=atom) == "Native site"
+    assert feed.findtext("atom:entry/atom:title", namespaces=atom) == "Liquid Post"
     assert "Native site @toc" in (output / "2026/05/19/liquid.html").read_text()
     assert not (output / "gaussianintegral/index.html").exists()
     assert not (output / "_posts/_2026-05-17-private.html").exists()
@@ -1019,6 +1080,27 @@ def test_only_md2html_json_is_discovered_and_configuration_is_json(tmp_path: Pat
         load_settings(config)
 
 
+@pytest.mark.parametrize("value, message", [
+    ('{"math":"mathjax-cthml"}', "math.backend must be"),
+    ('{"commands":["python"]}', "commands must contain an object"),
+    ('{"site":[]}', "site must contain an object"),
+])
+def test_configuration_shapes_and_backends_are_validated(tmp_path: Path, value: str, message: str):
+    config = tmp_path / "md2html.json"
+    config.write_text(value)
+    with pytest.raises(ValueError, match=message):
+        load_settings(config)
+
+
+def test_force_execution_requires_execution_and_force_only_rebuilds_pages(tmp_path: Path):
+    source = tmp_path / "article.md"
+    source.write_text("# Page\n")
+    with pytest.raises(ValueError, match="requires --execute"):
+        settings_from_args(parser().parse_args([str(source), "-F"]))
+    settings = settings_from_args(parser().parse_args([str(source), "-eF"]))
+    assert settings.execute and settings.force_execution and not settings.force
+
+
 def test_relative_config_keeps_relative_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     Path("md2html.json").write_text('{"input":"content","output":"public","templates":"templates"}')
@@ -1110,6 +1192,7 @@ def test_page_frontmatter_selects_template_css_and_stylesheets(tmp_path: Path):
     templates.mkdir()
     (templates / "card.html").write_text(
         "{% for href in md2html.stylesheets %}<link rel=stylesheet href=\"{{ href }}\">{% endfor %}"
+        "{% for css in md2html.inline_stylesheets %}<style>{{ css }}</style>{% endfor %}"
         "<style>{{ md2html.css }}</style><main>{{ content }}</main>"
     )
     (tmp_path / "custom.css").write_text("body{color:rebeccapurple}")
@@ -1524,7 +1607,7 @@ def test_static_mathjax_without_node_is_one_clean_build_error(
 ):
     from md2html2 import mathjax, worker
 
-    monkeypatch.setattr(mathjax, "_worker", None)
+    mathjax._workers.clear()
     attempts = 0
 
     def missing_node(*args, **kwargs):
@@ -1573,6 +1656,34 @@ def test_dependency_free_math_asset_modes(tmp_path: Path, backend: str, marker: 
     assert (tmp_path / "assets/md2html/page.css").is_file() == (assets == "shared")
 
 
+@pytest.mark.parametrize("backend", ["mathjax-chtml", "svg", "mathml"])
+def test_jekyll_mode_warns_and_leaves_static_math_raw(tmp_path: Path, backend: str):
+    source, output = tmp_path / "site", tmp_path / "public"
+    source.mkdir()
+    (source / "index.md").write_text("---\ntitle: Math\n---\n$x+1$\n")
+    settings = Settings(
+        input=source, output=output, output_mode="jekyll", project_root=source,
+        math=MathSettings(backend), recursive=True,
+    )
+    result = Project(settings).build()
+    page = (output / "index.html").read_text()
+    assert "$x+1$" in page and "<mjx-container" not in page and "<math" not in page and "<svg" not in page
+    assert result.warnings == [f"{backend} rendering is unavailable in Jekyll compatibility mode; leaving TeX source in place"]
+
+
+def test_jekyll_mode_renders_frontmatter_free_custom_feed(tmp_path: Path):
+    source, output = tmp_path / "site", tmp_path / "public"
+    source.mkdir()
+    (source / "_config.yml").write_text("title: Feed site\n")
+    (source / "feed.xml").write_text("<feed><title>{{ site.title }}</title></feed>")
+    settings = Settings(
+        input=source, output=output, output_mode="jekyll", project_root=source, recursive=True,
+        math=MathSettings("mathjax"),
+    )
+    Project(settings).build()
+    assert (output / "feed.xml").read_text() == "<feed><title>Feed site</title></feed>\n"
+
+
 def test_standalone_directory_embeds_renderer_and_authored_assets_per_page(tmp_path: Path):
     source, output = tmp_path / "content", tmp_path / "public"
     source.mkdir()
@@ -1585,10 +1696,23 @@ def test_standalone_directory_embeds_renderer_and_authored_assets_per_page(tmp_p
     Project(Settings(input=source, output=output, project_root=source, assets="standalone", recursive=True)).build()
     for name in ("one.html", "two.html"):
         page = (output / name).read_text()
-        assert '<link rel="stylesheet"' not in page
-        assert "window.assetLoaded = true" in page
-        assert page.count("data:image/png;base64,") == 2
+        assert '<link rel="stylesheet" href="style.css">' in page
+        assert '<script src="site.js"></script>' in page
+        assert "window.assetLoaded = true" not in page
+        assert page.count("data:image/png;base64,") == 1
         assert "data:font/woff2;base64," in page
+
+
+def test_standalone_preserves_raw_link_and_script_elements(tmp_path: Path):
+    (tmp_path / "feed.xml").write_text("<feed/>")
+    (tmp_path / "site.js").write_text("window.loaded = true")
+    output = build_one(
+        tmp_path,
+        '<link rel="alternate" href="feed.xml"><script src="site.js"></script>\n',
+    )
+    assert '<link rel="alternate" href="feed.xml">' in output
+    assert '<script src="site.js"></script>' in output
+    assert "data:application" not in output and "window.loaded = true" not in output
 
 
 def test_asset_mode_changes_prune_obsolete_renderer_files(tmp_path: Path):

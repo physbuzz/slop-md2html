@@ -3,7 +3,7 @@
 ## Summary
 
 md2html2 covers the core md2html renderer and static-site workflow with about
-55% less production Python: approximately 2,477 lines instead of 5,534. Its
+52% less production Python: approximately 2,652 lines instead of 5,534. Its
 architecture is better organized around immutable settings, one project model,
 one content renderer, and one execution/cache implementation.
 
@@ -25,14 +25,14 @@ dependency tracking, asset handling, error recovery, and watch/serve behavior
 are materially better in md2html2. Restoring every original configuration knob
 would add complexity without improving the central architecture.
 
-Both current test suites pass.
+The md2html2 test suite and preview-site integration build pass.
 
 ## Feature comparison
 
 | Area | Original md2html | md2html2 | Assessment |
 | --- | --- | --- | --- |
 | Default math | Static MathJax CommonHTML | Static MathJax CommonHTML | Restored. Browser MathJax, SVG, MathML, and raw output remain configurable. |
-| Execution workspace | Inline code is copied to a temporary source; file sources execute from their source directory | Inline source is copied into its cache workspace; file-backed `{source}` refers to the original file while commands run in the cache workspace | Intended behavior. Relative imports and includes retain their ordinary meaning while generated products stay in the cache. |
+| Execution workspace | Inline code is copied to a temporary source; file sources execute from their source directory | Inline source is copied into its page-owned cache; file-backed `{source}` refers to the original file and commands run from the containing page directory | Intended behavior. Relative files use the article's directory while executables and captured output stay in the cache. |
 | Directive arguments | Supports `lang=`, `caption=`, `compiler=`, `options=`, and quoted CSV arguments | Intentionally recognizes comma-separated flags only | The smaller flag-only syntax is the intended API. |
 | Compiler Explorer | Supports `godbolt`, short links, client-state URLs, and compiler options | Not implemented | A separable missing feature rather than a core rendering problem. |
 | Dry run | `--dry-run` emits jobs and the dependency graph as JSON without writing | Not implemented | A useful diagnostic feature that was explicitly deferred. |
@@ -42,8 +42,8 @@ Both current test suites pass.
 
 The default math difference is defined in `md2html2/settings.py`. Execution is
 implemented in `md2html2/render.py`: inline source is written into the
-workspace, while file-backed source remains in its article project so relative
-imports and includes continue to work.
+workspace, file-backed source remains in its article project, and commands use
+the containing page directory as their working directory.
 
 ## Original-only commands and configuration
 
@@ -87,7 +87,7 @@ accepted and does not need to change.
 ### Cache invalidation
 
 The md2html2 execution workspace is selected primarily by source content.
-Changing a command requires `--force`. This avoids machine- and checkout-specific
+Changing a command requires `--force-execution` with `--execute`. This avoids machine- and checkout-specific
 cache invalidation and makes uploaded CI caches portable, at the cost of not
 automatically detecting command changes.
 
@@ -110,14 +110,14 @@ safe continuation or cache cleanup impossible.
 
 The new execution model provides:
 
-- a page-shaped `.md2html-cache/pages/...` hierarchy;
+- a page-owned `SOURCE_DIRECTORY/.md2html-cache/PAGE_NAME/...` hierarchy;
 - stable and portable workspaces;
 - `{source}`, `{filename}`, `{sourcedir}`, `{builddir}`, `{slug}`,
   `{executable}`, `{output}`, and `{python}` command placeholders;
-- containment of compiler products and other generated files;
+- containment of compiled executables and captured text output;
 - cached output when execution is disabled, including in CI;
 - completion markers that distinguish valid output from failed execution;
-- stale snippet and deleted-page cleanup;
+- stale snippet cleanup and project-level cache cleanup;
 - cleanup after recoverable execution failures; and
 - protection against unsafe cleanup after malformed source structures.
 
@@ -193,7 +193,7 @@ Other improvements include:
 - `--clean`;
 - separate example config, template, and CSS commands;
 - `--version`;
-- output-collision warnings that allow unrelated pages to continue; and
+- preflight output containment and collision errors before files are written; and
 - protection against source-to-output self-overwrites.
 
 ## Jekyll limitations
@@ -222,11 +222,11 @@ with maximum gzip compression:
 | Ruby Jekyll reference | 676,833 | 42,640 |
 | Original md2html | 678,056 | 42,796 |
 | Old md2html redesign | 677,745 | 42,714 |
-| md2html2 | 545,194 | 35,577 |
+| md2html2 | 557,243 | 36,696 |
 
-The md2html2 page uses 34,575 bytes of CommonHTML CSS, 5,958 bytes gzipped,
+The md2html2 page uses 34,791 bytes of CommonHTML CSS, 6,001 bytes gzipped,
 and a complete 22-file local font set. The page preloads seven font families;
-its initial compressed HTML, CSS, and preloaded-font payload is 232,546 bytes.
+its initial compressed HTML, CSS, and preloaded-font payload is 233,709 bytes.
 Browser measurements found the same 17-pixel inline
 math height, baseline alignment, display overflow behavior, and zero measured
 layout shift as the old redesign. The complete page remains visible with

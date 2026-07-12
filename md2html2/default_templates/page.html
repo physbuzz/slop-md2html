@@ -54,6 +54,9 @@
   {% if md2html.math_css %}<style>
 {{ md2html.math_css }}
   </style>{% endif %}
+  {% for stylesheet in md2html.inline_stylesheets %}<style>
+{{ stylesheet }}
+  </style>{% endfor %}
   {% for stylesheet in md2html.stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">
   {% endfor %}
   {% if md2html.mathjax_src %}<script>{{ md2html.mathjax_config }}</script>

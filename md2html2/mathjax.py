@@ -19,11 +19,14 @@ class Chtml:
 
 
 class MathJax:
-    def __init__(self) -> None:
+    def __init__(self, project_root: Path) -> None:
         script = files("md2html2").joinpath("scripts/mathjax-chtml.mjs")
+        package_root = Path(str(files("md2html2"))).parent
+        roots = (project_root.absolute(), *project_root.absolute().parents, package_root)
+        node_modules = next((root / "node_modules" for root in roots if (root / "node_modules/mathjax").is_dir()), project_root / "node_modules")
         self.worker = JsonWorker(
-            ["node", Path(str(script))], missing="build-time MathJax needs Node.js",
-            unavailable="build-time MathJax is unavailable; run npm install in the md2html2 package",
+            ["node", Path(str(script)), node_modules], missing="build-time MathJax needs Node.js",
+            unavailable="build-time MathJax is unavailable; run npm install in the project directory",
         )
         ready = self.worker.ready
         self.css = re.sub(r"^\s*<style\b[^>]*>|</style>\s*$", "", str(ready["css"]), flags=re.I)
@@ -38,13 +41,14 @@ class MathJax:
         self.worker.close()
 
 
-_worker: MathJax | None = None
+_workers: dict[Path, MathJax] = {}
 _lock = threading.Lock()
 
 
-def render_chtml(tex: str, display: bool) -> Chtml:
-    global _worker
+def render_chtml(tex: str, display: bool, project_root: Path) -> Chtml:
+    root = project_root.absolute()
     with _lock:
-        if _worker is None:
-            _worker = MathJax()
-    return _worker.render(tex, display)
+        worker = _workers.get(root)
+        if worker is None:
+            worker = _workers[root] = MathJax(root)
+    return worker.render(tex, display)
