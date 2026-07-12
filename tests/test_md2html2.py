@@ -724,6 +724,7 @@ def test_jekyll_markdown_preserves_markdown_and_expands_md2html_syntax(tmp_path:
         "# Notes\n\n@toc\n\n@include(parts/more.md)\n\n@src(program.py, execute)\n\n"
         "@src-begin(python, execute)\nprint('inline markdown')\n@src-end\n\n"
         "```text\n@src(not-a-directive.py)\n{{ untouched_code }}\n```\n\n"
+        "## Exercises\n\n### Exercise 1.1\n\n"
         "Liquid stays {{ site.title }} and math stays $x^2$.\n\n![[image.png|200]]\n",
     )
     settings = Settings(
@@ -737,6 +738,7 @@ def test_jekyll_markdown_preserves_markdown_and_expands_md2html_syntax(tmp_path:
     assert markdown.startswith("---\nlayout: default\nrender_with_liquid: false\ntitle: index.md\n---")
     assert '<div class="table-of-contents">' in markdown
     assert '<a href="#included">Included</a>' in markdown
+    assert markdown.count('class="toc-exercises"') == 1 and "*Exercises:*" not in markdown
     assert '<div class="codehilite"><pre>' in markdown and "markdown execution" in markdown
     assert "inline-source" in markdown and "inline markdown" in markdown
     assert "@src(program.py" not in markdown and "@src-begin" not in markdown and "@src-end" not in markdown

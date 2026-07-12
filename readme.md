@@ -889,10 +889,10 @@ Markdown for a later Jekyll build:
 ```
 
 This mode expands `@include`, `@toc`, `@src`, inline source blocks, and
-Obsidian images. Source directives become syntax-highlighted HTML that is valid
-inside Markdown, and cached or newly executed output is included below the
-source. Ordinary fenced code, inline code, math, raw HTML, links, and Liquid
-remain for Jekyll. Directives written inside fenced or inline code remain
+Obsidian images. Generated tables of contents and source directives become HTML
+that is valid inside Markdown, and cached or newly executed output is included
+below the source. Ordinary fenced code, inline code, math, raw HTML, links, and
+Liquid remain for Jekyll. Directives written inside fenced or inline code remain
 literal.
 
 The output keeps each `.md` or `.markdown` path. Source front matter overrides
