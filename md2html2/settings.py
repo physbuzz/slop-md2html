@@ -72,8 +72,9 @@ class Settings:
     frontmatter: dict[str, Any] = field(default_factory=dict)
     site_data: dict[str, Any] = field(default_factory=dict)
     commands: dict[str, str] = field(default_factory=dict)
-    highlight_style: str = "default"
-    highlight_dark_style: str = "github-dark"
+    highlighter: str = "pygments"
+    highlighter_style: str | None = None
+    highlighter_dark_style: str | None = None
 
     @classmethod
     def single(cls, source: Path, output: Path | None = None) -> "Settings":
@@ -185,7 +186,7 @@ def load_settings(config_path: Path) -> Settings:
     reserved = {
         "input", "output", "output_mode", "templates", "template", "css", "stylesheets",
         "feature_css", "minify_css", "parse_liquid", "assets", "math", "images", "execute", "timeout", "force", "recursive", "clean",
-        "exclude", "frontmatter", "commands", "highlight_style", "highlight_dark_style", "site",
+        "exclude", "frontmatter", "commands", "highlighter", "highlighter_style", "highlighter_dark_style", "site",
     }
     site_data = dict(raw.get("site") or {})
     site_data.update({key: value for key, value in raw.items() if key not in reserved})
@@ -216,8 +217,9 @@ def load_settings(config_path: Path) -> Settings:
         frontmatter=dict(frontmatter),
         site_data=site_data,
         commands={str(key): str(value) for key, value in (raw.get("commands") or {}).items()},
-        highlight_style=str(raw.get("highlight_style", "default")),
-        highlight_dark_style=str(raw.get("highlight_dark_style", "github-dark")),
+        highlighter=str(raw.get("highlighter", "pygments")),
+        highlighter_style=str(raw["highlighter_style"]) if raw.get("highlighter_style") is not None else None,
+        highlighter_dark_style=str(raw["highlighter_dark_style"]) if raw.get("highlighter_dark_style") is not None else None,
     )
 
 
@@ -229,6 +231,7 @@ EXAMPLE_CONFIG = """{
   "assets": "shared",
   "minify_css": true,
   "parse_liquid": true,
+  "highlighter": "pygments",
   "math": {
     "backend": "mathjax-chtml"
   },

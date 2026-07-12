@@ -18,25 +18,15 @@ from urllib.parse import unquote, urlsplit
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-from pygments.styles import get_style_by_name
-from pygments.util import ClassNotFound
-
 from . import __version__
-from .project import BuildResult, Project, syntax_css
+from .highlighting import HIGHLIGHTERS, syntax_css
+from .project import BuildResult, Project
 from .settings import ASSET_MODES, EXAMPLE_CONFIG, OUTPUT_MODES, Settings, default_output, find_config, load_settings, normal_path, page_output
 
 PAGE_CSS = (
     "page-base.css", "feature-code.css", "feature-math.css",
     "feature-toc.css", "feature-image.css", "feature-warning.css",
 )
-
-
-def _pygments_style(name: str) -> str:
-    try:
-        get_style_by_name(name)
-    except ClassNotFound as error:
-        raise argparse.ArgumentTypeError(str(error)) from error
-    return name
 
 
 def parser() -> argparse.ArgumentParser:
@@ -76,8 +66,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--no-feature-css", action="store_true", help="omit CSS for generated code, math, TOCs, images, and warnings")
     result.add_argument("--no-minify-css", action="store_true", help="leave generated CSS readable")
     result.add_argument("--no-liquid", action="store_true", help="do not render Liquid in source documents")
-    result.add_argument("--highlight-style", type=_pygments_style, help="Pygments style name for light syntax highlighting")
-    result.add_argument("--highlight-dark-style", type=_pygments_style, help="Pygments style name for dark syntax highlighting")
+    result.add_argument("--highlighter", choices=HIGHLIGHTERS, help="syntax highlighter (default: pygments)")
+    result.add_argument("--highlighter-style", help="light syntax-highlighting style")
+    result.add_argument("--highlighter-dark-style", help="dark syntax-highlighting style")
     result.add_argument("--math", choices=("mathjax", "mathjax-chtml", "svg", "mathml", "raw"), help="math rendering backend")
     result.add_argument("--math-fonts", choices=("auto", "all", "inline", "local", "remote", "none"), help="CHTML font asset mode (default: auto)")
     result.add_argument("--timeout", type=float, help="execution timeout in seconds")
@@ -110,7 +101,7 @@ def _write_example(value: str, destination: str, force: bool) -> int:
 
 def _apply_cli(settings: Settings, args: argparse.Namespace) -> Settings:
     changes = {}
-    for name in ("output_mode", "template", "highlight_style", "highlight_dark_style", "assets"):
+    for name in ("output_mode", "template", "highlighter", "highlighter_style", "highlighter_dark_style", "assets"):
         if value := getattr(args, name):
             changes[name] = value
     for name in ("execute", "force", "recursive", "clean"):
@@ -445,9 +436,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.example_template is not None:
         return _write_example(_resource("default_templates/page.html"), args.example_template, args.force)
     if args.example_css is not None:
-        values = [_resource(f"assets/{name}") for name in PAGE_CSS]
-        values.insert(1, syntax_css())
-        return _write_example("\n".join(values), args.example_css, args.force)
+        try:
+            values = [_resource(f"assets/{name}") for name in PAGE_CSS]
+            values.insert(1, syntax_css(args.highlighter or "pygments", args.highlighter_style, args.highlighter_dark_style))
+            return _write_example("\n".join(values), args.example_css, args.force)
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
     try:
         settings = settings_list_from_args(args)
         if args.serve and any(item.markdown_mode for item in settings):

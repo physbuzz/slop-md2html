@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path
 import shutil
@@ -1002,14 +1003,14 @@ def test_only_md2html_json_is_discovered_and_configuration_is_json(tmp_path: Pat
     with pytest.raises(ValueError, match="must be a JSON file"):
         load_settings(tmp_path / "md2html.yml")
     config = tmp_path / "md2html.json"
-    config.write_text('{"input":"content","timeout":3.5,"feature_css":false,"minify_css":false,"parse_liquid":false,"highlight_style":"friendly","images":{"class":"centered","width":"50%"}}')
+    config.write_text('{"input":"content","timeout":3.5,"feature_css":false,"minify_css":false,"parse_liquid":false,"highlighter_style":"friendly","images":{"class":"centered","width":"50%"}}')
     assert find_config(tmp_path) == config
     settings = load_settings(config)
     assert settings.timeout == 3.5
     assert not settings.feature_css
     assert not settings.minify_css
     assert not settings.parse_liquid
-    assert settings.highlight_style == "friendly"
+    assert settings.highlighter_style == "friendly"
     assert settings.images == ImageSettings("centered", "50%")
     config.write_text("input: content\n")
     with pytest.raises(ValueError, match="could not read configuration"):
@@ -1141,16 +1142,16 @@ def test_directory_pages_can_choose_different_templates_and_css(tmp_path: Path):
     assert '<main class="container">' in (output / "two.html").read_text()
 
 
-def test_custom_css_keeps_feature_css_and_highlight_styles_are_cli_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_custom_css_keeps_feature_css_and_highlighter_styles_are_cli_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     Path("base.css").write_text("body{color:navy}")
     Path("code.md").write_text("```python\nif True: print(1)\n```\n")
-    assert main(["code.md", "--css", "base.css", "--highlight-style", "monokai"]) == 0
+    assert main(["code.md", "--css", "base.css", "--highlighter-style", "monokai"]) == 0
     output = Path("code.html").read_text()
     assert "color:navy" in output and ".codehilite" in output
     assert "#272822" in output
-    settings = settings_from_args(parser().parse_args(["code.md", "--highlight-dark-style", "friendly"]))
-    assert settings.highlight_dark_style == "friendly"
+    settings = settings_from_args(parser().parse_args(["code.md", "--highlighter-dark-style", "friendly"]))
+    assert settings.highlighter_dark_style == "friendly"
     assert main(["code.md", "--css", "base.css", "--no-feature-css"]) == 0
     output = Path("code.html").read_text()
     assert "color:navy" in output and ".codehilite .k {" not in output
@@ -1158,8 +1159,87 @@ def test_custom_css_keeps_feature_css_and_highlight_styles_are_cli_names(tmp_pat
     assert main(["code.md", "--css", "base.css"]) == 0
     output = Path("code.html").read_text()
     assert "color:navy" not in output and ".codehilite .k{" in output
-    with pytest.raises(SystemExit):
-        parser().parse_args(["code.md", "--highlight-style", "not-a-pygments-style"])
+    assert main(["code.md", "--highlighter-style", "not-a-pygments-style"]) == 2
+
+
+def test_pygments_does_not_inspect_rouge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from md2html2 import highlighting
+
+    def unavailable(*args, **kwargs):
+        raise AssertionError("a Pygments build inspected Rouge")
+
+    monkeypatch.setattr(highlighting, "JsonWorker", unavailable)
+    source = tmp_path / "article.md"
+    source.write_text("```python\nprint('pygments')\n```\n")
+    result = Project(Settings.single(source)).build()
+    assert not result.warnings
+    assert '<div class="codehilite fenced-code">' in source.with_suffix(".html").read_text()
+
+
+def test_rouge_backend_uses_rouge_markup_styles_and_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+):
+    from md2html2 import highlighting
+
+    class FakeRouge:
+        styles = {"github.light", "github.dark", "custom"}
+
+        def highlight(self, code, language, filename):
+            return f'<div class="codehilite"><pre><span class="rouge-{language}">{code}</span></pre></div>\n'
+
+        def css(self, style, scope):
+            return f"{scope} .rouge-token {{ color: {style}; }}"
+
+    monkeypatch.setattr(highlighting, "_rouge", FakeRouge())
+    output = build_one(
+        tmp_path, "```python\nprint('rouge')\n```\n",
+        highlighter="rouge", highlighter_style=None, highlighter_dark_style=None,
+    )
+    assert 'class="rouge-python"' in output
+    assert "color:github.light" in output and "color:github.dark" in output
+    assert main(["--example-css", "-", "--highlighter", "rouge"]) == 0
+    assert ".rouge-token" in capsys.readouterr().out
+    assert main([str(tmp_path / "article.md"), "--highlighter", "rouge", "--highlighter-style", "missing"]) == 2
+    assert "unknown Rouge style: missing" in capsys.readouterr().err
+
+
+def test_missing_rouge_is_a_clean_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+    from md2html2 import highlighting, worker
+
+    monkeypatch.setattr(highlighting, "_rouge", None)
+
+    def missing_ruby(*args, **kwargs):
+        raise FileNotFoundError("ruby was not found")
+
+    monkeypatch.setattr(worker.subprocess, "Popen", missing_ruby)
+    source = tmp_path / "code.md"
+    source.write_text("```ruby\nputs 1\n```\n")
+    assert main([str(source), "--highlighter", "rouge"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("error:") == 1
+    assert "Rouge needs Ruby: ruby was not found" in captured.err
+    assert not source.with_suffix(".html").exists()
+
+
+def test_missing_rouge_gem_is_a_clean_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+    from md2html2 import highlighting, worker
+
+    class MissingGem:
+        stdout = io.StringIO('{"ready":false,"error":"cannot load such file -- rouge"}\n')
+        stderr = io.StringIO()
+
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(highlighting, "_rouge", None)
+    monkeypatch.setattr(worker.subprocess, "Popen", lambda *args, **kwargs: MissingGem())
+    source = tmp_path / "code.md"
+    source.write_text("```ruby\nputs 1\n```\n")
+    assert main([str(source), "--highlighter", "rouge"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "install it with gem install rouge: cannot load such file -- rouge" in captured.err
 
 
 def test_css_is_minified_by_default_and_can_remain_readable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1440,7 +1520,7 @@ def test_shared_browser_mathjax_does_not_run_node(tmp_path: Path, monkeypatch: p
 def test_static_mathjax_without_node_is_one_clean_build_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ):
-    from md2html2 import mathjax
+    from md2html2 import mathjax, worker
 
     monkeypatch.setattr(mathjax, "_worker", None)
     attempts = 0
@@ -1450,7 +1530,7 @@ def test_static_mathjax_without_node_is_one_clean_build_error(
         attempts += 1
         raise FileNotFoundError("node was not found")
 
-    monkeypatch.setattr(mathjax.subprocess, "Popen", missing_node)
+    monkeypatch.setattr(worker.subprocess, "Popen", missing_node)
     source = tmp_path / "note.md"
     source.write_text("$x+1$ and $y+2$\n")
     assert main([str(source), "--math", "mathjax-chtml"]) == 2
@@ -1646,11 +1726,14 @@ def test_directory_assets_have_copy_links_and_update_under_watch(tmp_path: Path)
 
 
 def test_pyinstaller_build_and_install_workflow_is_declared():
-    makefile = (Path(__file__).parents[1] / "makefile").read_text()
-    project = (Path(__file__).parents[1] / "pyproject.toml").read_text()
+    root = Path(__file__).parents[1]
+    makefile = (root / "makefile").read_text()
+    project = (root / "pyproject.toml").read_text()
+    specification = (root / "md2html.spec").read_text()
     assert "install: pyinstaller" in makefile
-    assert "--onefile" in makefile and "--copy-metadata md2html2" in makefile
-    assert 'node_modules:node_modules' in makefile and "$(NPM) install" in makefile
+    assert "PyInstaller --clean md2html.spec" in makefile and "$(NPM) install" in makefile
+    assert "copy_metadata('md2html2')" in specification and "('node_modules', 'node_modules')" in specification
+    assert "'latex2mathml'" in specification and "'ziamath'" in specification and "EXE(" in specification
     assert 'build = ["pyinstaller>=6"]' in project
 
 

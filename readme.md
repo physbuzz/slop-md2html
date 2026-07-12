@@ -54,15 +54,68 @@ install the package for development:
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e ".[dev]"
-npm install
 ```
 
-The npm packages provide MathJax and its CommonHTML fonts. Static
-`mathjax-chtml` requires them and a `node` executable at build time. Shared
-browser-MathJax assets also come from the npm packages but do not run Node.
-CDN browser MathJax does not need the npm packages at build time.
-Selecting `mathjax-chtml` without its build-time requirements stops the build
-with an error; invalid individual expressions remain as TeX with a warning.
+Pygments, MathML, and SVG support are installed with the Python package. The
+other highlighters are optional; install only the tools used by your builds.
+
+## Highlighters
+
+md2html provides Pygments and Rouge syntax highlighting and five math
+rendering backends. Selecting one backend never checks for or warns about an
+unrelated optional backend.
+
+### Code
+
+Pygments is the default and is installed with md2html. It needs no external
+program. Select Rouge when matching Jekyll and Rouge tokenization is useful:
+
+```bash
+gem install rouge
+md2html --highlighter rouge article.md
+```
+
+Rouge requires Ruby and the Rouge gem. Install Ruby with the package manager
+for the operating system, then use its `gem` command to install Rouge. The
+`gem` command is an installer; builds run `ruby` and load the installed Rouge
+library. A Pygments build does not inspect Ruby, RubyGems, or Rouge.
+
+Choose backend-specific light and dark styles with `--highlighter-style` and
+`--highlighter-dark-style`. Pygments defaults to `default` and `github-dark`;
+Rouge defaults to `github.light` and `github.dark`.
+
+### Math
+
+Static CommonHTML uses MathJax under Node. Install Node.js, which normally
+includes npm, then install the pinned MathJax packages from the md2html source
+directory:
+
+```bash
+npm install
+md2html --math mathjax-chtml article.md
+```
+
+Shared browser MathJax also uses those npm packages so it can copy MathJax and
+its fonts into the site, but it does not execute Node. To use browser MathJax
+without installing Node or npm, select the CDN explicitly:
+
+```bash
+md2html --math mathjax --assets cdn article.md
+```
+
+The resulting page needs network access when it loads. `--math mathml` needs
+no Node, npm, Ruby, gem, browser JavaScript, CDN, or TeX installation;
+`latex2mathml` is already a Python dependency. It produces compact accessible
+markup but supports less LaTeX than MathJax. `--math svg` is likewise
+self-contained and uses the installed `ziamath` and `latex2mathml` Python
+packages. It has broad offline browser support, but complex pages can become
+substantially larger. `--math raw` preserves the LaTeX delimiters without a
+renderer.
+
+Selecting static MathJax without Node or its npm packages, or Rouge without
+Ruby or the Rouge gem, stops the build with a clear error. Invalid individual
+math expressions remain as TeX with a warning. If no optional system tools are
+installed, use Pygments with MathML, SVG, raw math, or CDN browser MathJax.
 
 Run the tests:
 
@@ -217,8 +270,9 @@ building independent pages.
   "minify_css": true,
   "parse_liquid": true,
   "assets": "shared",
-  "highlight_style": "default",
-  "highlight_dark_style": "github-dark",
+  "highlighter": "pygments",
+  "highlighter_style": null,
+  "highlighter_dark_style": null,
 
   "math": {
     "backend": "mathjax-chtml",
@@ -278,8 +332,9 @@ needed.
 | `stylesheets` | Add one or more stylesheet paths. Standalone output embeds local files; shared and CDN output preserve links. |
 | `feature_css` | Add CSS for generated code, output, math, tables of contents, images, and warnings. The default is `true`. |
 | `minify_css` | Minify embedded and generated shared CSS. The default is `true`. |
-| `highlight_style` | Select a Pygments style name for light syntax highlighting. |
-| `highlight_dark_style` | Select a Pygments style name for dark and automatic dark-mode highlighting. |
+| `highlighter` | Select `pygments` or `rouge`. The default is `pygments`. |
+| `highlighter_style` | Select the light style from the active highlighter. `null` selects its default. |
+| `highlighter_dark_style` | Select the dark and automatic dark-mode style. `null` selects the active highlighter's default. |
 
 ### Math And Execution
 
@@ -701,7 +756,7 @@ md2html --example-css templates/page.css
 ```
 
 The generated `page.css` contains the base page CSS, feature CSS, and default
-light/dark Pygments rules. Edit both files, then build with:
+light/dark rules from the selected highlighter. Edit both files, then build with:
 
 ```bash
 md2html --templates templates article.md
@@ -790,16 +845,20 @@ scripts, and media. Shared output keeps reusable files in the output tree.
 
 ### Syntax Highlighting
 
-Fenced code and source directives use Pygments. Select styles by name:
+Fenced code and source directives use Pygments by default. Select a highlighter
+and styles by name:
 
 ```bash
-md2html --highlight-style friendly \
-  --highlight-dark-style github-dark article.md
+md2html --highlighter pygments --highlighter-style friendly \
+  --highlighter-dark-style github-dark article.md
+md2html --highlighter rouge --highlighter-style github.light \
+  --highlighter-dark-style github.dark article.md
 ```
 
-Set `highlight_style` and `highlight_dark_style` in JSON for project defaults.
-Run `pygmentize -L styles` to list names provided by the installed Pygments
-version. md2html rejects an unknown CLI style name. It generates token CSS from
+Set `highlighter`, `highlighter_style`, and `highlighter_dark_style` in JSON for
+project defaults. Run `pygmentize -L styles` to list Pygments styles or
+`rougify help style` to inspect Rouge's style command. md2html rejects a style
+that is not provided by the selected highlighter. It generates token CSS from
 the selected styles and adds it only when the page or shared stylesheet needs
 code highlighting. Native layouts receive the selected token rules through
 `md2html.css`; place that value after the site's structural code-block CSS.
@@ -1165,6 +1224,8 @@ collections, Sass, or arbitrary Liquid extensions. It does not emit Jekyll
 Markdown in static-site mode; use the separate `jekyll-markdown` output mode
 when Jekyll should perform the later rendering stages.
 
-Browser-side MathJax requires network access when the page is opened. Static
-CommonHTML requires Node and the installed npm packages while building. SVG
-and MathML use Python packages and do not require a TeX installation.
+CDN browser MathJax requires network access when the page is opened; shared
+browser MathJax uses copied local assets. Static CommonHTML requires Node and
+the installed npm packages while building. SVG and MathML use Python packages
+and do not require a TeX installation. Rouge requires Ruby and its installed
+gem only when Rouge is selected; Pygments remains independent of both.

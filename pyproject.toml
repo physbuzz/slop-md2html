@@ -31,7 +31,7 @@ where = ["."]
 include = ["md2html2*"]
 
 [tool.setuptools.package-data]
-md2html2 = ["assets/*.css", "default_templates/*.html", "scripts/*.mjs"]
+md2html2 = ["assets/*.css", "default_templates/*.html", "scripts/*.mjs", "scripts/*.rb"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

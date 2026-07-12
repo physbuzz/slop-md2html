@@ -1,4 +1,4 @@
-PYTHON ?= python3
+PYTHON ?= .venv/bin/python
 NPM ?= npm
 APP_NAME ?= md2html
 LOCAL_BIN ?= $(HOME)/.local/bin
@@ -13,22 +13,11 @@ install: pyinstaller
 pyinstaller:
 	$(PYTHON) -m pip install -e '.[build]'
 	$(NPM) install
-	$(PYTHON) -m PyInstaller \
-		--name "$(APP_NAME)" \
-		--onefile \
-		--clean \
-		--collect-all md2html2 \
-		--collect-all pygments \
-		--collect-all mistune \
-		--collect-all liquid \
-		--collect-all watchdog \
-		--copy-metadata md2html2 \
-		--add-data "node_modules:node_modules" \
-		md2html2/__main__.py
+	$(PYTHON) -m PyInstaller --clean md2html.spec
 
 test:
 	.venv/bin/python -m pytest -q
 
 clean:
-	rm -rf build dist *.spec *.egg-info .pytest_cache
+	rm -rf build dist *.egg-info .pytest_cache
 	find . -type d -name .md2html-cache -prune -exec rm -rf {} +

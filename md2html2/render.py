@@ -21,11 +21,7 @@ from typing import Any, Callable, Iterable
 import mistune
 from liquid import Environment, FileSystemLoader
 from liquid.exceptions import LiquidError
-from pygments import highlight
-from pygments.formatters import HtmlFormatter
-from pygments.lexers import get_lexer_by_name, get_lexer_for_filename
-from pygments.util import ClassNotFound
-
+from .highlighting import LANGUAGE_ALIASES, code_html
 from .settings import Settings, normal_path
 
 
@@ -46,7 +42,6 @@ TOC = re.compile(r"^[ \t]*@toc[ \t]*$", re.MULTILINE)
 HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
 EXERCISE = re.compile(r"^exercise\b", re.IGNORECASE)
 ALIGN = re.compile(r"\\begin\{(align\*?|gather\*?|multline\*?|equation\*?)\}.*?\\end\{\1\}", re.DOTALL)
-LANGUAGE_ALIASES = {"wl": "mathematica", "mma": "mathematica", "rkt": "racket", "py": "python", "js": "javascript"}
 LANGUAGE_SUFFIXES = {"python": ".py", "py": ".py", "javascript": ".js", "js": ".js", "racket": ".rkt", "cpp": ".cpp", "c++": ".cpp", "c": ".c", "bash": ".sh", "shell": ".sh", "sh": ".sh", "wl": ".wl", "mathematica": ".wl"}
 COMMANDS = {
     ".py": "{python} {source}",
@@ -182,25 +177,8 @@ class Stash:
         return text
 
 
-def _lexer(language: str, filename: Path | None = None):
-    language = LANGUAGE_ALIASES.get(language.lower(), language.lower())
-    try:
-        return get_lexer_by_name(language)
-    except ClassNotFound:
-        if filename:
-            try:
-                return get_lexer_for_filename(filename.name)
-            except ClassNotFound:
-                pass
-    return get_lexer_by_name("text")
-
-
-def code_html(code: str, language: str = "text", filename: Path | None = None) -> str:
-    return highlight(code.rstrip("\n") + "\n", _lexer(language, filename), HtmlFormatter(cssclass="codehilite"))
-
-
-def fenced_code_html(code: str, language: str, label: str | None) -> str:
-    markup = code_html(code, language)
+def fenced_code_html(code: str, language: str, label: str | None, highlighter: str) -> str:
+    markup = code_html(code, language, highlighter=highlighter)
     header = f'\n<div class="code-language">{html.escape(label)}</div>' if label else ""
     return markup.replace('<div class="codehilite">', f'<div class="codehilite fenced-code">{header}', 1)
 
@@ -410,7 +388,7 @@ class ContentRenderer:
             language = info or "text"
             label = LANGUAGE_ALIASES.get(info.lower(), info.lower()) if info else None
             label = "c++" if label == "cpp" else label
-            return stash.put(fenced_code_html(match.group(4), language, label), block=True)
+            return stash.put(fenced_code_html(match.group(4), language, label, self.settings.highlighter), block=True)
 
         body = FENCE.sub(protect_fence, body)
         body = INLINE_CODE.sub(
@@ -420,7 +398,7 @@ class ContentRenderer:
 
         def protect_highlight(match: re.Match[str]) -> str:
             features.code = True
-            markup = match.group(0) if output_markdown else code_html(match.group(2), match.group(1))
+            markup = match.group(0) if output_markdown else code_html(match.group(2), match.group(1), highlighter=self.settings.highlighter)
             return stash.put(markup, block=True)
 
         body = HIGHLIGHT.sub(protect_highlight, body)
@@ -569,7 +547,7 @@ class ContentRenderer:
         executor: Executor, stash: Stash, features: Features, label: str | None = None, href: str | None = None,
     ) -> str:
         features.code = True
-        code_markup = code_html(code, language, source)
+        code_markup = code_html(code, language, source, self.settings.highlighter)
         collapsible = bool(flags & {"collapsed", "collapsible", "expanded"})
         label = html.escape(label or ("Source" if collapsible else f"{language} source"))
         if href:

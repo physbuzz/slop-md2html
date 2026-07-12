@@ -16,10 +16,9 @@ import shutil
 from typing import Any
 
 from liquid.exceptions import LiquidError
-from pygments.formatters import HtmlFormatter
-from pygments.util import ClassNotFound
 import yaml
 
+from .highlighting import syntax_css, validate_styles
 from .render import FRONTMATTER, ContentRenderer, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
 from .settings import MARKDOWN_SUFFIXES, PAGE_SUFFIXES, Settings, atomic_write, normal_path, page_output
 
@@ -37,16 +36,6 @@ STYLESHEET = re.compile(r"<link\b(?=[^>]*\brel=(?:['\"][^'\"]*stylesheet[^'\"]*[
 MEDIA_ASSET = re.compile(r"<(?:img|source|video|audio|track|embed|object)\b[^>]*\b(?:src|poster|data)=['\"]([^'\"]+)['\"]", re.IGNORECASE)
 LINK_ASSET = re.compile(r"<link\b(?=[^>]*\bhref=['\"]([^'\"]+)['\"])[^>]*>", re.IGNORECASE)
 SCRIPT_ASSET = re.compile(r"<script\b(?=[^>]*\bsrc=['\"]([^'\"]+)['\"])[^>]*>\s*</script>", re.IGNORECASE)
-
-
-def syntax_css(light_style: str = "default", dark_style: str = "github-dark") -> str:
-    try:
-        light = HtmlFormatter(style=light_style).get_style_defs(".codehilite")
-        dark = HtmlFormatter(style=dark_style).get_style_defs('html[data-theme="dark"] .codehilite')
-        automatic = HtmlFormatter(style=dark_style).get_style_defs('html:not([data-theme="light"]) .codehilite')
-    except ClassNotFound as error:
-        raise ValueError(str(error)) from error
-    return light + "\n" + dark + "\n@media (prefers-color-scheme:dark){\n" + automatic + "\n}\n"
 
 
 def minify_css(value: str) -> str:
@@ -147,6 +136,7 @@ class Project:
     """A complete build, whether it contains one page or a native site."""
 
     def __init__(self, settings: Settings) -> None:
+        validate_styles(settings.highlighter, settings.highlighter_style, settings.highlighter_dark_style)
         self.settings = settings
         self.source_root = settings.input if settings.input.is_dir() else settings.input.parent
         self.site_config = self.source_root / "_config.yml"
@@ -648,7 +638,9 @@ class Project:
             except OSError as error:
                 raise ValueError(f"could not read CSS {path}: {error}") from error
         if feature_css and features.code:
-            values.insert(1 if values else 0, syntax_css(self.settings.highlight_style, self.settings.highlight_dark_style))
+            values.insert(1 if values else 0, syntax_css(
+                self.settings.highlighter, self.settings.highlighter_style, self.settings.highlighter_dark_style,
+            ))
         css = "\n".join(values)
         return minify_css(css) if self.settings.minify_css else css
 
@@ -710,7 +702,7 @@ class Project:
         if self.settings.jekyll_mode or self.settings.markdown_mode:
             return context
         if self.settings.site_mode and self.settings.feature_css and rendered.features.code:
-            css = syntax_css(self.settings.highlight_style, self.settings.highlight_dark_style)
+            css = syntax_css(self.settings.highlighter, self.settings.highlighter_style, self.settings.highlighter_dark_style)
             context["css"] = minify_css(css) if self.settings.minify_css else css
         if rendered.features.math_css:
             if self.settings.asset_mode == "shared":
