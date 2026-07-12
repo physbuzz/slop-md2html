@@ -622,6 +622,24 @@ def test_native_site_model_layouts_includes_assets_and_dated_urls(tmp_path: Path
     assert not result.warnings
 
 
+def test_native_layout_receives_configured_pygments_css(tmp_path: Path):
+    source, output = site_fixture(tmp_path)
+    post = source / "_posts" / "2026-05-18-gaussianintegral.md"
+    post.write_text(post.read_text() + "\n```mathematica\nrho[ix_]\n```\n", encoding="utf-8")
+
+    Project(site_settings(source, output)).build()
+
+    html = (output / "2026/05/18/gaussianintegral.html").read_text()
+    assert '<span class="nv">ix_</span>' in html
+    assert ".codehilite .nv{color:#19177C}" in html
+    assert 'html[data-theme="dark"] .codehilite .nv{color:#79C0FF}' in html
+
+    Project(site_settings(source, output, feature_css=False)).build()
+    html = (output / "2026/05/18/gaussianintegral.html").read_text()
+    assert '<span class="nv">ix_</span>' in html
+    assert ".codehilite .nv{color:#19177C}" not in html
+
+
 def test_site_pagination_builds_jekyll_paginator_pages(tmp_path: Path):
     source = tmp_path / "site"
     output = tmp_path / "public"

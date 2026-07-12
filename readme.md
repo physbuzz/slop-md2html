@@ -799,7 +799,8 @@ Set `highlight_style` and `highlight_dark_style` in JSON for project defaults.
 Run `pygmentize -L styles` to list names provided by the installed Pygments
 version. md2html rejects an unknown CLI style name. It generates token CSS from
 the selected styles and adds it only when the page or shared stylesheet needs
-code highlighting.
+code highlighting. Native layouts receive the selected token rules through
+`md2html.css`; place that value after the site's structural code-block CSS.
 
 Highlighted fences use a `codehilite` wrapper. Source directives use a
 `code-box` containing `code-header`, `codehilite`, and, when available,

@@ -709,6 +709,9 @@ class Project:
         }
         if self.settings.jekyll_mode or self.settings.markdown_mode:
             return context
+        if self.settings.site_mode and self.settings.feature_css and rendered.features.code:
+            css = syntax_css(self.settings.highlight_style, self.settings.highlight_dark_style)
+            context["css"] = minify_css(css) if self.settings.minify_css else css
         if rendered.features.math_css:
             if self.settings.asset_mode == "shared":
                 stylesheet, fonts = self._write_math_assets(rendered.features, result, target)
