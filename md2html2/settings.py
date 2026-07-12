@@ -14,6 +14,7 @@ LIQUID_SUFFIXES = {".html", ".htm", ".xml"}
 PAGE_SUFFIXES = MARKDOWN_SUFFIXES | LIQUID_SUFFIXES
 OUTPUT_MODES = ("pages", "site", "jekyll", "jekyll-markdown")
 SITE_MODES = {"site", "jekyll"}
+ASSET_MODES = ("shared", "standalone", "cdn")
 
 
 def normal_path(path: Path) -> Path:
@@ -53,7 +54,7 @@ class Settings:
     feature_css: bool = True
     minify_css: bool = True
     parse_liquid: bool = True
-    shared_assets: bool = False
+    assets: str = "auto"
     math: MathSettings = field(default_factory=MathSettings)
     images: ImageSettings = field(default_factory=ImageSettings)
     execute: bool = False
@@ -82,7 +83,11 @@ class Settings:
 
     @property
     def shared_math_assets(self) -> bool:
-        return self.input.is_dir() and self.math.backend == "mathjax-chtml" and (self.site_mode or self.shared_assets)
+        return self.math.backend == "mathjax-chtml" and self.asset_mode == "shared"
+
+    @property
+    def asset_mode(self) -> str:
+        return ("shared" if self.input.is_dir() else "standalone") if self.assets == "auto" else self.assets
 
     @property
     def site_mode(self) -> bool:
@@ -136,8 +141,11 @@ def load_settings(config_path: Path) -> Settings:
     if not isinstance(math_value, dict):
         raise ValueError("math must be a backend name or an object")
     font_mode = str(math_value.get("chtml_fonts", "auto"))
-    if font_mode not in {"auto", "all", "inline", "remote", "none"}:
-        raise ValueError("math.chtml_fonts must be auto, all, inline, remote, or none")
+    if font_mode not in {"auto", "all", "inline", "local", "remote", "none"}:
+        raise ValueError("math.chtml_fonts must be auto, all, inline, local, remote, or none")
+    assets = str(raw.get("assets", "auto"))
+    if assets != "auto" and assets not in ASSET_MODES:
+        raise ValueError("assets must be shared, standalone, or cdn")
     templates = raw.get("templates", [])
     if isinstance(templates, str):
         templates = [templates]
@@ -172,7 +180,7 @@ def load_settings(config_path: Path) -> Settings:
         raise ValueError("output_mode must be " + ", ".join(OUTPUT_MODES))
     reserved = {
         "input", "output", "output_mode", "templates", "template", "css", "stylesheets",
-        "feature_css", "minify_css", "parse_liquid", "shared_assets", "math", "images", "execute", "timeout", "force", "recursive", "clean",
+        "feature_css", "minify_css", "parse_liquid", "assets", "math", "images", "execute", "timeout", "force", "recursive", "clean",
         "exclude", "frontmatter", "commands", "highlight_style", "highlight_dark_style", "site",
     }
     site_data = dict(raw.get("site") or {})
@@ -189,7 +197,7 @@ def load_settings(config_path: Path) -> Settings:
         feature_css=bool(raw.get("feature_css", True)),
         minify_css=bool(raw.get("minify_css", True)),
         parse_liquid=bool(raw.get("parse_liquid", True)),
-        shared_assets=bool(raw.get("shared_assets", mode == "pages" and path_value("input", ".").is_dir())),
+        assets=assets,
         math=MathSettings(backend=str(math_value.get("backend", "mathjax-chtml")), chtml_fonts=font_mode),
         images=ImageSettings(
             class_name=str(images["class"]) if images.get("class") is not None else None,
@@ -214,6 +222,7 @@ EXAMPLE_CONFIG = """{
   "output": "_site",
   "output_mode": "site",
   "templates": ["templates"],
+  "assets": "shared",
   "minify_css": true,
   "parse_liquid": true,
   "math": {

@@ -12,7 +12,7 @@ from urllib.request import urlopen
 import pytest
 
 from md2html2.cli import WatchGraph, _server, main, parser, settings_from_args, settings_list_from_args
-from md2html2.project import Project
+from md2html2.project import CHTML_CDN, Project
 from md2html2.render import parse_frontmatter
 from md2html2.settings import ImageSettings, MathSettings, Settings, find_config, load_settings, normal_path
 
@@ -93,7 +93,8 @@ def test_mathjax_chtml_is_static_and_standalone(tmp_path: Path):
     assert "<mjx-container" in output
     assert "@font-face" in output
     assert "mjx-c.mjx-c" in output
-    assert "cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font" in output
+    assert "data:font/woff2;base64," in output
+    assert "cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font" not in output
     assert "data-tex=" not in output and "data-latex=" not in output
     assert '<span class="math-copy-source">$$x^2+1$$</span>' in output
     assert "tex-mml-chtml.js" not in output
@@ -101,7 +102,7 @@ def test_mathjax_chtml_is_static_and_standalone(tmp_path: Path):
 
 
 @pytest.mark.parametrize("backend, expected, absent", [
-    ("mathjax", "tex-mml-chtml.js", "<mjx-container"),
+    ("mathjax", "window.__md2htmlMathFonts", "<mjx-container"),
     ("raw", "$x+1$", "tex-mml-chtml.js"),
 ])
 def test_browser_and_raw_math_backends(tmp_path: Path, backend: str, expected: str, absent: str):
@@ -184,7 +185,8 @@ def test_inline_source_uses_the_code_box_contract(tmp_path: Path):
 def test_obsidian_images_and_embedded_video_are_responsive(tmp_path: Path):
     (tmp_path / "diagram one.png").write_bytes(b"image")
     output = build_one(tmp_path, "![[diagram one.png|width=70%|alt=A diagram|class=centered]]\n")
-    assert '<img class="obsidian-image centered" src="diagram one.png" alt="A diagram" style="width:70%">' in output
+    assert '<img class="obsidian-image centered" src="data:image/png;base64,' in output
+    assert 'alt="A diagram" style="width:70%">' in output
     numeric = build_one(tmp_path, "![[diagram one.png|320]]\n")
     assert 'alt="diagram one" style="width:320px"' in numeric
     assert ".obsidian-image{display:block;margin:1rem auto}" in output
@@ -757,7 +759,8 @@ def test_markdown_and_liquid_only_pages_use_distinct_rendering_paths(tmp_path: P
     single.write_text('<img src="image.png">')
     (tmp_path / "image.png").write_bytes(b"image")
     Project(Settings.single(single, tmp_path / "moved/single.html")).build()
-    assert (tmp_path / "moved/image.png").read_bytes() == b"image"
+    assert 'src="data:image/png;base64,' in (tmp_path / "moved/single.html").read_text()
+    assert not (tmp_path / "moved/image.png").exists()
 
 
 def test_source_liquid_can_be_disabled_without_disabling_layouts(tmp_path: Path):
@@ -791,10 +794,11 @@ def test_source_output_collision_warns_and_other_pages_continue(tmp_path: Path, 
     assert [item.output for item in planned] == [Path("public/page.html"), Path("public/feed.xml"), Path("public/note.html")]
     collision = Project(Settings.single(Path("page.html"))).build()
     assert not collision.written and not collision.page_dependencies
+    assert any("source and output are the same file" in warning for warning in collision.warnings)
     assert main(["page.html", "note.md"]) == 0
     assert Path("page.html").read_text() == "{{ site.title }}"
-    assert Path("note.html").is_file()
-    assert "source and output are the same file" in capsys.readouterr().err
+    assert Path("html/note.html").is_file()
+    assert not capsys.readouterr().err
 
 
 def test_native_site_deduplicates_mathjax_styles(tmp_path: Path):
@@ -854,7 +858,7 @@ def test_config_paths_are_relative_to_config(tmp_path: Path):
     assert settings.output == root / "public"
     assert settings.math.backend == "mathml"
     assert settings.math.chtml_fonts == "inline"
-    assert settings.shared_assets
+    assert settings.asset_mode == "shared"
     config.write_text('{"input":"content","output_mode":"jekyll-markdown","frontmatter":{"layout":"post"}}')
     settings = load_settings(config)
     assert settings.output == root / "markdown" and settings.recursive
@@ -960,7 +964,7 @@ def test_page_frontmatter_selects_template_css_and_stylesheets(tmp_path: Path):
     )
     assert "rebeccapurple" in output
     assert ".code-box" in output and ".codehilite .k" in output
-    assert '<link rel=stylesheet href="print.css">' in output
+    assert "@media print{}" in output and "<link rel=stylesheet" not in output
 
 
 def test_directory_pages_can_choose_different_templates_and_css(tmp_path: Path):
@@ -1112,13 +1116,13 @@ def test_help_and_readme_explain_watch_serve_and_examples(capsys: pytest.Capture
     help_text = capsys.readouterr().out
     assert "rebuild when source files change" in help_text
     assert "md2html -erf notes -o html" in help_text
-    assert "--shared-assets" in help_text and "--highlight-style" in help_text and "--timeout" in help_text
+    assert "--assets" in help_text and "--standalone" in help_text and "--timeout" in help_text
     assert main(["--readme"]) == 0
     readme = capsys.readouterr().out
     assert readme == (Path(__file__).parents[1] / "readme.md").read_text()
     assert "@src-begin" in readme
     assert "2026/05/18/gaussianintegral.html" in readme
-    assert '"shared_assets": true' in readme and "md2html.json" in readme
+    assert '"assets": "shared"' in readme and "md2html.json" in readme
     for action in parser()._actions:
         for option in (name for name in action.option_strings if name.startswith("--")):
             assert option in readme
@@ -1148,7 +1152,8 @@ def test_multiple_files_build_beside_sources_or_under_output_root(tmp_path: Path
     for name in ("one.md", "two.md", "folder/three.md"):
         Path(name).write_text(f"# {name}\n")
     assert main(["one.md", "two.md", "folder/three.md"]) == 0
-    assert Path("one.html").is_file() and Path("two.html").is_file() and Path("folder/three.html").is_file()
+    assert Path("html/one.html").is_file() and Path("html/two.html").is_file() and Path("html/folder/three.html").is_file()
+    assert Path("html/assets/md2html/page.css").is_file()
     settings = settings_list_from_args(parser().parse_args(["one.md", "two.md", "folder/three.md", "-o", "public"]))
     assert [item.output for item in settings] == [Path("public/one.html"), Path("public/two.html"), Path("public/folder/three.html")]
     assert main(["one.md", "two.md", "folder/three.md", "-o", "public"]) == 0
@@ -1170,14 +1175,14 @@ def test_multiple_directories_preserve_their_names_under_one_output(tmp_path: Pa
         assert 'href="assets/md2html/page.css"' in page
 
 
-def test_shared_assets_flag_collects_files_and_externalizes_common_css(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_shared_asset_mode_collects_files_and_externalizes_common_css(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     Path("one.md").write_text("# One\n")
     Path("two.md").write_text("# Two\n")
-    settings = settings_list_from_args(parser().parse_args(["one.md", "two.md", "--shared-assets"]))
+    settings = settings_list_from_args(parser().parse_args(["one.md", "two.md", "--assets", "shared"]))
     assert [item.output for item in settings] == [Path("html/one.html"), Path("html/two.html")]
-    assert all(item.shared_assets for item in settings)
-    assert main(["one.md", "two.md", "--shared-assets"]) == 0
+    assert all(item.asset_mode == "shared" for item in settings)
+    assert main(["one.md", "two.md", "--assets", "shared"]) == 0
     assert Path("html/assets/md2html/page.css").is_file()
     assert 'href="assets/md2html/page.css"' in Path("html/one.html").read_text()
 
@@ -1188,7 +1193,7 @@ def test_shared_directory_uses_external_static_math_css_and_fonts(tmp_path: Path
     source.mkdir()
     (source / "index.md").write_text("# Math\n\n$x^2$\n")
     settings = Settings(
-        input=source, output=output, project_root=source, shared_assets=True,
+        input=source, output=output, project_root=source, assets="shared",
         math=MathSettings("mathjax-chtml", "auto"),
     )
     Project(settings).build()
@@ -1197,12 +1202,118 @@ def test_shared_directory_uses_external_static_math_css_and_fonts(tmp_path: Path
     assert 'href="assets/md2html/mathjax-chtml.css"' in page
     assert "@font-face" not in page
     assert (output / "assets/md2html/mathjax-chtml.css").is_file()
-    assert list((output / "assets/md2html/mathjax/woff2").glob("*.woff2"))
+    assert len(list((output / "assets/md2html/mathjax/woff2").glob("*.woff2"))) >= 20
     stylesheet = output / "assets/md2html/mathjax-chtml.css"
     before = stylesheet.read_text()
     skipped = Project(settings).build(skip_unchanged=True)
     assert skipped.skipped == [output / "index.html"]
     assert stylesheet.read_text() == before
+
+
+def test_single_page_can_use_shared_chtml_without_duplicate_css(tmp_path: Path):
+    source, output = tmp_path / "note.md", tmp_path / "note.html"
+    source.write_text("$x^2$\n")
+    Project(Settings.single(source, output).with_cli(assets="shared")).build()
+    page = output.read_text()
+    assert 'href="assets/md2html/mathjax-chtml.css"' in page
+    assert "data:font/woff2;base64," not in page and CHTML_CDN not in page
+    assert (tmp_path / "assets/md2html/mathjax-chtml.css").is_file()
+
+
+def test_asset_defaults_and_standalone_alias(tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text("# Note\n")
+    assert Settings.single(source).asset_mode == "standalone"
+    assert Settings(input=tmp_path, output=tmp_path / "public").asset_mode == "shared"
+    assert settings_from_args(parser().parse_args([str(source), "--standalone"])).asset_mode == "standalone"
+    assert settings_from_args(parser().parse_args([str(source), "--math-fonts", "local"])).math.chtml_fonts == "local"
+
+
+@pytest.mark.parametrize("assets, marker", [
+    ("standalone", "window.__md2htmlMathFonts"),
+    ("shared", 'src="assets/md2html/mathjax.js"'),
+    ("cdn", "https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-mml-chtml.js"),
+])
+def test_browser_mathjax_asset_modes(tmp_path: Path, assets: str, marker: str):
+    source = tmp_path / "note.md"
+    source.write_text("# Math\n\n$x+1$\n")
+    output = tmp_path / f"{assets}.html"
+    result = Project(Settings.single(source, output).with_cli(assets=assets, math=MathSettings("mathjax"))).build()
+    page = output.read_text()
+    assert marker in page and "<mjx-container" not in page
+    if assets == "standalone":
+        assert 'src="https://cdn.jsdelivr.net' not in page and not (tmp_path / "assets").exists()
+        assert "enableSpeech:false" in page and "enableBraille:false" in page
+        assert '"double-struck"' in page and "dynamicFiles).forEach" in page
+    elif assets == "shared":
+        assert (tmp_path / "assets/md2html/mathjax.js").is_file()
+        assert (tmp_path / "assets/md2html/mathjax-newcm-font/chtml/woff2/mjx-ncm-n.woff2").is_file()
+        assert (tmp_path / "assets/md2html/sre/speech-worker.js").is_file()
+        assert result.copied
+
+
+@pytest.mark.parametrize("assets, fonts, marker", [
+    ("standalone", "auto", "data:font/woff2;base64,"),
+    ("standalone", "remote", CHTML_CDN),
+    ("cdn", "auto", CHTML_CDN),
+    ("cdn", "local", "data:font/woff2;base64,"),
+])
+def test_standalone_chtml_font_asset_matrix(tmp_path: Path, assets: str, fonts: str, marker: str):
+    source = tmp_path / "note.md"
+    source.write_text("$x+1$\n")
+    output = tmp_path / f"{assets}-{fonts}.html"
+    Project(Settings.single(source, output).with_cli(assets=assets, math=MathSettings("mathjax-chtml", fonts))).build()
+    assert marker in output.read_text()
+
+
+@pytest.mark.parametrize("backend, marker", [
+    ("svg", "md2html-math-svg-image"),
+    ("mathml", "md2html-mathml"),
+    ("raw", "$x+1$"),
+])
+@pytest.mark.parametrize("assets", ["standalone", "shared", "cdn"])
+def test_dependency_free_math_asset_modes(tmp_path: Path, backend: str, marker: str, assets: str):
+    source = tmp_path / "note.md"
+    source.write_text("$x+1$\n")
+    output = tmp_path / f"{backend}-{assets}.html"
+    Project(Settings.single(source, output).with_cli(assets=assets, math=MathSettings(backend))).build()
+    assert marker in output.read_text()
+    assert (tmp_path / "assets/md2html/page.css").is_file() == (assets == "shared")
+
+
+def test_standalone_directory_embeds_renderer_and_authored_assets_per_page(tmp_path: Path):
+    source, output = tmp_path / "content", tmp_path / "public"
+    source.mkdir()
+    (source / "style.css").write_text("body { background: url(pixel.png); }")
+    (source / "pixel.png").write_bytes(b"image")
+    (source / "site.js").write_text("window.assetLoaded = true;")
+    body = '<link rel="stylesheet" href="style.css"><script src="site.js"></script><img src="pixel.png">\n\n$x$\n'
+    (source / "one.md").write_text(body)
+    (source / "two.md").write_text(body)
+    Project(Settings(input=source, output=output, project_root=source, assets="standalone", recursive=True)).build()
+    for name in ("one.html", "two.html"):
+        page = (output / name).read_text()
+        assert '<link rel="stylesheet"' not in page
+        assert "window.assetLoaded = true" in page
+        assert page.count("data:image/png;base64,") == 2
+        assert "data:font/woff2;base64," in page
+
+
+def test_asset_mode_changes_prune_obsolete_renderer_files(tmp_path: Path):
+    source, output = tmp_path / "content", tmp_path / "public"
+    source.mkdir()
+    (source / "index.md").write_text("$x$\n")
+    Project(Settings(input=source, output=output, project_root=source, assets="shared")).build()
+    assert (output / "assets/md2html/page.css").is_file()
+    assert (output / "assets/md2html/mathjax-chtml.css").is_file()
+    settings = Settings(
+        input=source, output=output, project_root=source, assets="standalone",
+        math=MathSettings("mathjax"),
+    )
+    Project(settings).build()
+    assert not (output / "assets/md2html/page.css").exists()
+    assert not (output / "assets/md2html/mathjax-chtml.css").exists()
+    assert not (output / "assets/md2html/mathjax.js").exists()
 
 
 def test_multiple_input_server_exposes_only_planned_files(tmp_path: Path):

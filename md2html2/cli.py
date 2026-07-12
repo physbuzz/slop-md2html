@@ -23,7 +23,7 @@ from pygments.util import ClassNotFound
 
 from . import __version__
 from .project import BuildResult, Project, syntax_css
-from .settings import EXAMPLE_CONFIG, OUTPUT_MODES, Settings, default_output, find_config, load_settings, normal_path, page_output
+from .settings import ASSET_MODES, EXAMPLE_CONFIG, OUTPUT_MODES, Settings, default_output, find_config, load_settings, normal_path, page_output
 
 PAGE_CSS = (
     "page-base.css", "feature-code.css", "feature-math.css",
@@ -70,7 +70,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--template", help="standalone HTML template name or path")
     result.add_argument("--css", action="append", help="CSS file to embed; repeat to combine files")
     result.add_argument("--stylesheet", action="append", help="stylesheet href; repeat to add more")
-    result.add_argument("--shared-assets", action="store_true", help="write shared page CSS instead of embedding it")
+    result.add_argument("--assets", choices=ASSET_MODES, help="place renderer assets in shared files, each standalone page, or on a CDN")
+    result.add_argument("--standalone", action="store_const", const="standalone", dest="assets", help="embed renderer assets in every page")
     result.add_argument("--no-css", action="store_true", help="do not embed CSS in standalone pages")
     result.add_argument("--no-feature-css", action="store_true", help="omit CSS for generated code, math, TOCs, images, and warnings")
     result.add_argument("--no-minify-css", action="store_true", help="leave generated CSS readable")
@@ -78,7 +79,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--highlight-style", type=_pygments_style, help="Pygments style name for light syntax highlighting")
     result.add_argument("--highlight-dark-style", type=_pygments_style, help="Pygments style name for dark syntax highlighting")
     result.add_argument("--math", choices=("mathjax", "mathjax-chtml", "svg", "mathml", "raw"), help="math rendering backend")
-    result.add_argument("--math-fonts", choices=("auto", "all", "inline", "remote", "none"), help="CHTML font asset mode (default: auto)")
+    result.add_argument("--math-fonts", choices=("auto", "all", "inline", "local", "remote", "none"), help="CHTML font asset mode (default: auto)")
     result.add_argument("--timeout", type=float, help="execution timeout in seconds")
     result.add_argument("--clean", action="store_true", help="remove a site output directory before building")
     result.add_argument("--readme", action="store_true", help="print the complete installed README")
@@ -109,10 +110,10 @@ def _write_example(value: str, destination: str, force: bool) -> int:
 
 def _apply_cli(settings: Settings, args: argparse.Namespace) -> Settings:
     changes = {}
-    for name in ("output_mode", "template", "highlight_style", "highlight_dark_style"):
+    for name in ("output_mode", "template", "highlight_style", "highlight_dark_style", "assets"):
         if value := getattr(args, name):
             changes[name] = value
-    for name in ("execute", "force", "recursive", "clean", "shared_assets"):
+    for name in ("execute", "force", "recursive", "clean"):
         if getattr(args, name):
             changes[name] = True
     if args.templates:
@@ -178,7 +179,7 @@ def settings_list_from_args(args: argparse.Namespace) -> list[Settings]:
             output = normal_path(args.output or default_output(mode))
             return [_apply_cli(Settings(
                 input=source, output=output, output_mode=mode, project_root=source,
-                recursive=args.recursive or mode != "pages", shared_assets=mode == "pages",
+                recursive=args.recursive or mode != "pages",
             ), args)]
 
     if not inputs:
@@ -189,7 +190,7 @@ def settings_list_from_args(args: argparse.Namespace) -> list[Settings]:
     else:
         mode = args.output_mode or "pages"
         base = Settings(input=inputs[0], output=default_output(mode), output_mode=mode, project_root=root)
-    shared = args.shared_assets or (base.output_mode == "pages" and any(path.is_dir() for path in inputs))
+    shared = len(inputs) > 1 or any(path.is_dir() for path in inputs)
     collection = len(inputs) > 1 and (args.output is not None or shared or base.markdown_mode)
     output_root = normal_path(args.output or base.output)
     common = _common_root(inputs)
@@ -202,7 +203,7 @@ def settings_list_from_args(args: argparse.Namespace) -> list[Settings]:
             output = source if base.markdown_mode else page_output(source)
         settings = replace(
             base, input=source, output=normal_path(output), recursive=base.recursive or args.recursive,
-            shared_assets=base.shared_assets or shared,
+            assets="shared" if base.assets == "auto" and shared else base.assets,
         )
         planned.append(_apply_cli(settings, args))
     return planned

@@ -185,7 +185,7 @@ but md2html2's live incremental behavior is better.
 Other improvements include:
 
 - shared page CSS for directory builds;
-- `--shared-assets`;
+- `--assets shared`, `--assets standalone`, and `--assets cdn`;
 - automatic relocation of standalone-page assets;
 - static CommonHTML font selection and preload pruning;
 - a remote CommonHTML font mode;
@@ -225,9 +225,10 @@ with maximum gzip compression:
 | Old md2html redesign | 677,745 | 42,714 |
 | md2html2 | 545,158 | 35,576 |
 
-The md2html2 page uses 33,272 bytes of CommonHTML CSS, 5,857 bytes gzipped,
-and eight local font files. Its initial compressed HTML, CSS, and preloaded-font
-payload is 232,445 bytes. Browser measurements found the same 17-pixel inline
+The md2html2 page uses 34,575 bytes of CommonHTML CSS, 5,958 bytes gzipped,
+and a complete 22-file local font set. The page preloads seven font families;
+its initial compressed HTML, CSS, and preloaded-font payload is 232,546 bytes.
+Browser measurements found the same 17-pixel inline
 math height, baseline alignment, display overflow behavior, and zero measured
 layout shift as the old redesign. The complete page remains visible with
 JavaScript disabled.

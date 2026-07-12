@@ -36,7 +36,7 @@ def main() -> int:
         "HTML gzip <= 38 KB": page_gzip <= 38_000,
         "CHTML CSS gzip <= 10 KB": css_gzip <= 10_000,
         "initial math payload <= 255 KB": initial_math_bytes <= 255_000,
-        "font files <= 10": len(fonts) <= 10,
+        "complete shared fonts <= 350 KB": 20 <= len(fonts) <= 30 and font_bytes <= 350_000,
         "page font preloads <= 10": len(preload_names) <= 10,
         "glyph metrics present": glyph_rules >= 100,
         "fonts are local": "cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font" not in styles,

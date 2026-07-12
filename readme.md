@@ -138,6 +138,13 @@ md2html --math svg test.md -o test-svg.html
 md2html --math mathml test.md -o test-mathml.html
 md2html --math mathjax-chtml --math-fonts auto test.md -o test-chtml.html
 
+# Embed every renderer asset in each page, or share local files across a site.
+md2html --standalone test.md
+md2html --assets shared notes -o html
+
+# Use remote renderer assets explicitly.
+md2html --assets cdn --math-fonts remote test.md
+
 # Use settings from another JSON file.
 md2html --config path/to/md2html.json
 ```
@@ -157,11 +164,10 @@ last two modes directly. The CLI value overrides `output_mode` from JSON. Use
 A page directory writes to `html`, a Jekyll site writes to `_site`, and Jekyll
 Markdown writes to `markdown` unless `-o` or configuration chooses another
 directory. Add `-r` to include nested Markdown in page mode; the other modes
-are recursive by default. Page directory builds use shared CSS by default.
-Several file inputs remain self-contained unless `-o` or
-`--shared-assets` collects them below one output directory.
-Set `"shared_assets": false` in a directory configuration to embed CSS in each
-page instead.
+are recursive by default. One input file embeds its assets by default. A
+directory or several input files share local assets below `assets/md2html/` by
+default. Use `--assets` to select another policy. `--standalone` is an alias
+for `--assets standalone`.
 
 `--execute`, `--recursive`, `--force`, and `--serve` have the short forms `-e`,
 `-r`, `-f`, and `-s`, so `-erf` combines the first three. `--watch` rebuilds
@@ -208,7 +214,7 @@ building independent pages.
   "feature_css": true,
   "minify_css": true,
   "parse_liquid": true,
-  "shared_assets": true,
+  "assets": "shared",
   "highlight_style": "default",
   "highlight_dark_style": "github-dark",
 
@@ -249,7 +255,7 @@ building independent pages.
 | `output_mode` | Select `"pages"`, `"site"`, `"jekyll"`, or `"jekyll-markdown"`. |
 | `recursive` | Read supported documents in nested directories. Site and Jekyll modes enable this by default. |
 | `parse_liquid` | Render Liquid in source documents. Templates and layouts always use Liquid. The default is `true`. |
-| `shared_assets` | Write common page CSS to `assets/md2html/page.css`. Directory page builds enable this by default. |
+| `assets` | Select `shared`, `standalone`, or `cdn` asset placement. One file defaults to `standalone`; collections default to `shared`. |
 | `clean` | Remove the output directory before a complete site build. |
 | `exclude` | Skip matching source paths. Exact paths, directory prefixes, and path patterns are accepted. |
 | `frontmatter` | Add default front matter to Jekyll Markdown output. Source front matter takes precedence. |
@@ -267,7 +273,7 @@ needed.
 | `templates` | Search this directory or ordered list of directories before `_templates` and the bundled templates. |
 | `template` | Select the standalone page template. The default is `page.html`. |
 | `css` | Replace the template's base CSS with one path or a list. `null` selects companion or bundled CSS; `[]` selects no base CSS. |
-| `stylesheets` | Add one or more `<link rel="stylesheet">` entries. Relative local files are watched and copied with moved standalone output. |
+| `stylesheets` | Add one or more stylesheet paths. Standalone output embeds local files; shared and CDN output preserve links. |
 | `feature_css` | Add CSS for generated code, output, math, tables of contents, images, and warnings. The default is `true`. |
 | `minify_css` | Minify embedded and generated shared CSS. The default is `true`. |
 | `highlight_style` | Select a Pygments style name for light syntax highlighting. |
@@ -278,7 +284,7 @@ needed.
 | Key | Meaning |
 | --- | --- |
 | `math.backend` | Select `mathjax`, `mathjax-chtml`, `svg`, `mathml`, or `raw`. |
-| `math.chtml_fonts` | Select `auto`, `all`, `inline`, `remote`, or `none` for static CommonHTML fonts. |
+| `math.chtml_fonts` | Select `auto`, `all`, `inline`, `local`, `remote`, or `none` for static CommonHTML fonts. |
 | `images.class` | Add one or more default classes to Obsidian images. Per-image classes are appended. |
 | `images.width` | Set a default Obsidian image width. A per-image width takes precedence. |
 | `execute` | Run source directives. Execution is off by default. |
@@ -583,26 +589,86 @@ also inline and inherits the page color.
 MathML does not support every LaTeX construct. When conversion fails, md2html
 emits a warning and falls back to the escaped LaTeX wrapper for that equation.
 
+### Asset Placement
+
+Set `--assets MODE` or the `assets` configuration key:
+
+| Mode | Behavior |
+| --- | --- |
+| `standalone` | Embed generated CSS, browser MathJax, CommonHTML fonts, and local authored stylesheets, scripts, and media in every page. |
+| `shared` | Write reusable renderer assets below `assets/md2html/` and link them from each page. Local site media remains in the output tree. |
+| `cdn` | Use versioned CDN URLs for browser MathJax and CommonHTML fonts. CSS generated by md2html remains inline. |
+
+`--standalone` is an alias for `--assets standalone`. A one-file build uses
+`standalone` by default. Directory and multiple-input builds use `shared` by
+default. `--assets shared` with one input file writes an `assets/md2html/`
+directory beside the output page.
+
+Standalone mode embeds local CSS `@import` files and local `url(...)`
+resources recursively. It also embeds local script and image sources. An
+explicit remote stylesheet, script, image, video, or iframe remains remote;
+md2html does not download arbitrary Internet resources during a build.
+
+Browser MathJax is copied as a minified combined component. Shared mode also
+copies its CommonHTML fonts, dynamically loaded font data, and speech worker.
+Standalone mode embeds the component, dynamic font modules, and web fonts in
+the page. CDN mode loads the versioned component and fonts from jsDelivr. Standalone browser
+MathJax disables its optional speech and Braille worker so the page makes no
+secondary file request; shared and CDN browser MathJax retain those tools.
+
 ### CommonHTML Fonts
 
 Set `--math-fonts MODE` or `math.chtml_fonts` when using `mathjax-chtml`:
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Copy and preload only fonts used by each directory/site page. Standalone pages use the matching CDN fonts and remain one file. |
-| `all` | Copy every CommonHTML font for a directory/site build, but preload only fonts used by each page. |
+| `auto` | Follow `assets`: embed used fonts in standalone pages, copy the complete local font set for shared output, or use CDN fonts for CDN output. |
+| `local` | Use installed fonts. Embed used fonts unless `assets` is `shared`, in which case copy the complete set. |
+| `remote` | Use versioned CDN fonts regardless of the general asset policy. |
+| `all` | Use every installed CommonHTML font rather than only the families required by the build. Placement still follows `assets`. |
 | `inline` | Embed used fonts as data URLs in the generated stylesheet. |
-| `remote` | Use CDN fonts for standalone and shared builds. |
 | `none` | Omit font files and `@font-face` rules. |
 
 Directory and site builds share `assets/md2html/mathjax-chtml.css` and store
 local fonts below `assets/md2html/mathjax/woff2/` when the selected mode uses
-local files. The stylesheet contains glyph metrics collected after typesetting
-and only the font faces used by the build. Pages preload only their own fonts.
+local files. Shared local output writes the complete 301 KB TeX WOFF2 set so
+adding or rebuilding another page cannot invalidate an earlier page's fonts.
+Pages preload only the families they use.
 
-Serve generated HTML and CSS with gzip or Brotli compression. Static
-CommonHTML markup compresses well, and shared font files can be cached across
-pages and visits.
+`local` and `remote` select ownership rather than layout. Local assets remain
+available if a CDN changes or disappears. Remote assets make the generated
+files smaller, but the first view requires the network. Browsers can cache CDN
+fonts between pages on the same site, but modern partitioned caches generally
+do not share that download with unrelated sites and no cache entry is
+permanent.
+
+The following sizes were measured from the repository's Gaussian Integral
+notes with the default page template and minified CSS. Standalone rows include
+the article's local image. CDN rows count only the HTML file, not that image or
+the resources downloaded by the browser.
+
+| Math output | Asset policy | HTML | Gzipped HTML |
+| --- | --- | ---: | ---: |
+| Raw LaTeX | standalone | 709 KB | 410 KB |
+| Native MathML | standalone | 860 KB | 419 KB |
+| Static CommonHTML | CDN fonts | 593 KB | 44 KB |
+| Static CommonHTML | standalone | 1,440 KB | 628 KB |
+| Inline SVG | standalone | 3,142 KB | 738 KB |
+| Browser MathJax | CDN | 118 KB | 21 KB |
+| Browser MathJax | standalone | 4,429 KB | 2,448 KB |
+
+MathML is the smallest dependency-free rendered form, but conversion does not
+cover every LaTeX construct. Static CommonHTML with embedded fonts is larger
+and has broader TeX coverage. Inline SVG has no font or JavaScript dependency,
+but repeated path data makes equation-heavy pages much larger. Browser
+MathJax CDN output keeps the HTML small at the cost of a runtime dependency;
+embedding the complete browser renderer and fonts is the largest standalone
+choice.
+
+For a multi-page site, shared local assets normally give the best durability
+and total size. For an archival single page, embedded CommonHTML avoids a
+third-party dependency while keeping the file substantially smaller than
+browser-rendered standalone MathJax.
 
 ## Templates And CSS
 
@@ -693,13 +759,13 @@ feature selection, so a standalone page first omits unused feature styles and
 then minifies the CSS it retains. Set `"minify_css": false` or pass
 `--no-minify-css` when inspecting generated styles.
 
-Directory builds and `--shared-assets` write common CSS to
-`assets/md2html/page.css` and link to it from each ordinary page. A page with
-its own `template` or `css` front matter embeds its selected CSS instead.
+`--assets shared` writes common CSS to `assets/md2html/page.css` and links to
+it from each ordinary page. A page with its own `template` or `css` front
+matter embeds its selected CSS instead.
 
-Local CSS files and their local `@import` dependencies are watched. Local
-stylesheet links and referenced page assets are copied when an independent
-page's output is moved.
+Local CSS files and their local `@import` dependencies are watched.
+Standalone mode embeds local stylesheet links, imports, CSS resources,
+scripts, and media. Shared output keeps reusable files in the output tree.
 
 ### Syntax Highlighting
 
