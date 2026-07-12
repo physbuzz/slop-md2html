@@ -1412,6 +1412,56 @@ def test_browser_mathjax_asset_modes(tmp_path: Path, assets: str, marker: str):
         assert result.copied
 
 
+def test_cdn_browser_mathjax_does_not_inspect_local_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def unavailable(*args, **kwargs):
+        raise AssertionError("a CDN build inspected local MathJax tools")
+
+    monkeypatch.setattr(Project, "_npm_asset", unavailable)
+    monkeypatch.setattr(subprocess, "Popen", unavailable)
+    source = tmp_path / "note.md"
+    source.write_text("$x+1$\n")
+    output = tmp_path / "note.html"
+    Project(Settings.single(source, output).with_cli(assets="cdn", math=MathSettings("mathjax"))).build()
+    assert MATHJAX_CDN in output.read_text()
+
+
+def test_shared_browser_mathjax_does_not_run_node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def unavailable(*args, **kwargs):
+        raise AssertionError("browser MathJax tried to run Node")
+
+    monkeypatch.setattr(subprocess, "Popen", unavailable)
+    source = tmp_path / "note.md"
+    source.write_text("$x+1$\n")
+    output = tmp_path / "note.html"
+    Project(Settings.single(source, output).with_cli(assets="shared", math=MathSettings("mathjax"))).build()
+    assert 'src="assets/md2html/mathjax.js"' in output.read_text()
+
+
+def test_static_mathjax_without_node_is_one_clean_build_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+):
+    from md2html2 import mathjax
+
+    monkeypatch.setattr(mathjax, "_worker", None)
+    attempts = 0
+
+    def missing_node(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise FileNotFoundError("node was not found")
+
+    monkeypatch.setattr(mathjax.subprocess, "Popen", missing_node)
+    source = tmp_path / "note.md"
+    source.write_text("$x+1$ and $y+2$\n")
+    assert main([str(source), "--math", "mathjax-chtml"]) == 2
+    captured = capsys.readouterr()
+    assert attempts == 1
+    assert captured.out == ""
+    assert captured.err.count("error:") == 1
+    assert "build-time MathJax needs Node.js: node was not found" in captured.err
+    assert not (tmp_path / "note.html").exists()
+
+
 @pytest.mark.parametrize("assets, fonts, marker", [
     ("standalone", "auto", "data:font/woff2;base64,"),
     ("standalone", "remote", CHTML_CDN),

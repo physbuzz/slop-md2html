@@ -61,6 +61,8 @@ The npm packages provide MathJax and its CommonHTML fonts. Static
 `mathjax-chtml` requires them and a `node` executable at build time. Shared
 browser-MathJax assets also come from the npm packages but do not run Node.
 CDN browser MathJax does not need the npm packages at build time.
+Selecting `mathjax-chtml` without its build-time requirements stops the build
+with an error; invalid individual expressions remain as TeX with a warning.
 
 Run the tests:
 

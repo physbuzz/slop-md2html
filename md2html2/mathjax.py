@@ -19,6 +19,10 @@ class Chtml:
     font_dir: Path
 
 
+class MathJaxUnavailable(OSError):
+    """The selected build-time renderer cannot be started."""
+
+
 class MathJax:
     def __init__(self) -> None:
         script = files("md2html2").joinpath("scripts/mathjax-chtml.mjs")
@@ -28,7 +32,7 @@ class MathJax:
                 stderr=subprocess.PIPE, text=True, bufsize=1,
             )
         except OSError as error:
-            raise RuntimeError(f"build-time MathJax needs Node.js: {error}") from error
+            raise MathJaxUnavailable(f"build-time MathJax needs Node.js: {error}") from error
         assert self.process.stdout
         line = self.process.stdout.readline()
         try:
@@ -37,7 +41,7 @@ class MathJax:
             ready = {"ready": False, "error": self._errors() or "worker did not start"}
         if not ready.get("ready"):
             self.close()
-            raise RuntimeError(
+            raise MathJaxUnavailable(
                 "build-time MathJax is unavailable; run npm install in the md2html2 package: "
                 + str(ready.get("error", "unknown error"))
             )
@@ -49,7 +53,7 @@ class MathJax:
     def render(self, tex: str, display: bool) -> Chtml:
         with self.lock:
             if self.process.poll() is not None or not self.process.stdin or not self.process.stdout:
-                raise RuntimeError("the build-time MathJax process stopped")
+                raise MathJaxUnavailable("the build-time MathJax process stopped")
             self.process.stdin.write(json.dumps({"tex": tex, "display": display}) + "\n")
             self.process.stdin.flush()
             response = json.loads(self.process.stdout.readline())

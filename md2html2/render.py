@@ -628,6 +628,8 @@ class ContentRenderer:
                 else:
                     delimiter = "$$" if display else "$"
                     markup = delimiter + tex + delimiter
+            except OSError:
+                raise
             except Exception as error:
                 warnings.append(f"could not render TeX; leaving source in place: {error}")
                 delimiter = "$$" if display else "$"

@@ -730,7 +730,7 @@ class Project:
         package_root = Path(str(files("md2html2"))).parent
         path = next((root / name for root in (package_root / "node_modules", Path.cwd() / "node_modules") if (root / name).exists()), None)
         if path is None:
-            raise ValueError("browser MathJax assets are unavailable; run npm install in the md2html package")
+            raise ValueError("browser MathJax assets are unavailable; run npm install in the md2html2 package")
         return path
 
     def _browser_mathjax_bundle(self) -> Path:
@@ -767,7 +767,7 @@ class Project:
                     if old.exists():
                         shutil.rmtree(old)
             self._copy_tree(self._browser_mathjax_fonts(), font_target, result)
-            self._copy_tree(bundle.parent / "sre", self._output_root() / "assets/md2html/sre", result)
+            self._copy_tree(self._npm_asset("mathjax/sre"), self._output_root() / "assets/md2html/sre", result)
             font_root = self._asset_url(font_target.parent.parent, page_target)
             config += f',loader:{{paths:{{fonts:"{font_root}"}}}},output:{{fontPath:"[fonts]/%%FONT%%-font"}}'
             source = self._asset_url(target, page_target)
