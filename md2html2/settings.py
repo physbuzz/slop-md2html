@@ -21,6 +21,12 @@ def normal_path(path: Path) -> Path:
     return Path(os.path.normpath(path.expanduser()))
 
 
+def atomic_write(path: Path, value: str) -> None:
+    temporary = path.with_name(f".{path.name}.md2html-tmp")
+    temporary.write_text(value, encoding="utf-8")
+    temporary.replace(path)
+
+
 def page_output(path: Path) -> Path:
     return path.with_suffix(".html") if path.suffix.lower() in MARKDOWN_SUFFIXES else path
 
@@ -131,9 +137,23 @@ def load_settings(config_path: Path) -> Settings:
     root = config_path.parent
     raw = read_mapping(config_path)
 
+    def rooted(value: Any) -> Path:
+        path = normal_path(Path(str(value)))
+        return path if path.is_absolute() else normal_path(root / path)
+
     def path_value(name: str, default: str) -> Path:
-        value = normal_path(Path(str(raw.get(name, default))))
-        return value if value.is_absolute() else normal_path(root / value)
+        return rooted(raw.get(name, default))
+
+    def list_value(name: str, *, nullable: bool = False) -> list[Any] | None:
+        value = raw.get(name)
+        if value is None:
+            return None if nullable else []
+        if isinstance(value, str):
+            return [value]
+        if not isinstance(value, list):
+            ending = ", or null" if nullable else ""
+            raise ValueError(f"{name} must be a path or a list of paths{ending}")
+        return value
 
     math_value = raw.get("math", {})
     if isinstance(math_value, str):
@@ -146,26 +166,10 @@ def load_settings(config_path: Path) -> Settings:
     assets = str(raw.get("assets", "auto"))
     if assets != "auto" and assets not in ASSET_MODES:
         raise ValueError("assets must be shared, standalone, or cdn")
-    templates = raw.get("templates", [])
-    if isinstance(templates, str):
-        templates = [templates]
-    if not isinstance(templates, list):
-        raise ValueError("templates must be a path or a list of paths")
-    def rooted(value: Any) -> Path:
-        path = normal_path(Path(str(value)))
-        return path if path.is_absolute() else normal_path(root / path)
-
+    templates = list_value("templates")
     template_paths = tuple(rooted(value) for value in templates)
-    css = raw.get("css")
-    if isinstance(css, str):
-        css = [css]
-    if css is not None and not isinstance(css, list):
-        raise ValueError("css must be a path, a list of paths, or null")
-    stylesheets = raw.get("stylesheets", [])
-    if isinstance(stylesheets, str):
-        stylesheets = [stylesheets]
-    if not isinstance(stylesheets, list):
-        raise ValueError("stylesheets must be a path or a list of paths")
+    css = list_value("css", nullable=True)
+    stylesheets = list_value("stylesheets")
     frontmatter = raw.get("frontmatter") or {}
     if not isinstance(frontmatter, dict):
         raise ValueError("frontmatter must contain an object")

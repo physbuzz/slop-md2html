@@ -25,5 +25,6 @@
   <main>
 {{ content }}
   </main>
+  {% if md2html.has_math_copy %}{% include "math-copy.html" %}{% endif %}
 </body>
 </html>

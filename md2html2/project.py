@@ -21,7 +21,7 @@ from pygments.util import ClassNotFound
 import yaml
 
 from .render import FRONTMATTER, ContentRenderer, Executor, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
-from .settings import MARKDOWN_SUFFIXES, PAGE_SUFFIXES, Settings, normal_path, page_output
+from .settings import MARKDOWN_SUFFIXES, PAGE_SUFFIXES, Settings, atomic_write, normal_path, page_output
 
 
 PROJECT_FILES = {"md2html.json"}
@@ -103,8 +103,8 @@ class Page:
     output_relative: Path
 
     def data(self) -> dict[str, Any]:
+        self.metadata.setdefault("title", self.source.name)
         data = dict(self.metadata)
-        data.setdefault("title", self.source.name)
         data["name"] = self.source.name
         data["url"] = self.url
         data.setdefault("path", self.relative.as_posix())
@@ -198,7 +198,7 @@ class Project:
                     continue
                 rendered = self._render_page(page, output_relative, url, paginator, target, result)
                 target.parent.mkdir(parents=True, exist_ok=True)
-                self._write_text(target, rendered.content)
+                atomic_write(target, rendered.content)
                 if self.settings.input.is_file():
                     self._copy_page_assets(target, rendered, result)
                 if rendered.executor:
@@ -229,12 +229,6 @@ class Project:
                 raise ValueError("site output cannot be the input directory")
             if self.settings.clean and source.is_relative_to(output):
                 raise ValueError("clean site output cannot contain the input directory")
-
-    @staticmethod
-    def _write_text(target: Path, value: str) -> None:
-        temporary = target.with_name(f".{target.name}.md2html-tmp")
-        temporary.write_text(value, encoding="utf-8")
-        temporary.replace(target)
 
     def _site_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
@@ -447,20 +441,18 @@ class Project:
             self.renderer.render(page.source, page.body, context, cache_page=output_relative, parse_liquid=parse_liquid)
             if markdown else self.renderer.render_liquid(page.source, page.body, context, parse_liquid=parse_liquid)
         )
-        page_data["title"] = rendered.title
-        page.metadata["title"] = rendered.title
-        md2html = self._renderer_context(rendered, target, result)
+        context["content"] = rendered.content
+        context["md2html"] = self._renderer_context(rendered, target, result)
         if not (self.settings.jekyll_mode or self.settings.markdown_mode):
-            md2html["stylesheets"] = [*self.settings.stylesheets, *self._values(page_data.get("stylesheets"))]
+            context["md2html"]["stylesheets"] = [*self.settings.stylesheets, *self._values(page_data.get("stylesheets"))]
+        content = rendered.content
         if self.settings.markdown_mode:
             metadata = {**self.settings.frontmatter, **page.metadata}
             content = "---\n" + yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True) + "---\n\n" + rendered.content
         elif self.settings.site_mode:
-            content = self._apply_layouts(rendered.content, page.source, rendered, context, md2html)
+            content = self._apply_layouts(page.source, rendered, context)
         elif markdown:
-            content = self._page_template(rendered, page_data, target, md2html)
-        else:
-            content = rendered.content
+            content = self._page_template(rendered, target, context)
         rendered.content = content.rstrip() + "\n"
         rendered.dependencies.update(self.loader.dependencies)
         rendered.dependencies.update(self.shared_dependencies)
@@ -558,10 +550,9 @@ class Project:
                     directory.rmdir()
             with suppress(OSError):
                 root.rmdir()
-    def _apply_layouts(
-        self, content: str, source: Path, rendered: Rendered, context: dict[str, Any], md2html: dict[str, Any],
-    ) -> str:
+    def _apply_layouts(self, source: Path, rendered: Rendered, context: dict[str, Any]) -> str:
         page = context["page"]
+        content = context["content"]
         layout_name = page.get("layout")
         seen: set[str] = set()
         while layout_name:
@@ -578,9 +569,8 @@ class Project:
             rendered.dependencies.add(path)
             metadata, template = parse_frontmatter(path.read_text(encoding="utf-8"))
             try:
-                content = self.liquid.from_string(liquid_source(template)).render(
-                    **context, content=content, layout=metadata, md2html=md2html,
-                )
+                context["content"] = content
+                content = self.liquid.from_string(liquid_source(template)).render(**context, layout=metadata)
             except LiquidError as error:
                 rendered.warnings.append(f"layout failed for {source}: {error}")
                 content += f'<aside class="warning">Layout cycle or error: {html.escape(str(error))}</aside>'
@@ -598,9 +588,8 @@ class Project:
         ]
         return next((path for path in candidates if path and path.is_file()), None)
 
-    def _page_template(
-        self, rendered: Rendered, page: dict[str, Any], target: Path, md2html: dict[str, Any],
-    ) -> str:
+    def _page_template(self, rendered: Rendered, target: Path, context: dict[str, Any]) -> str:
+        page = context["page"]
         name = str(page.get("template") or self.settings.template)
         path = self._find_template(name)
         if path is None:
@@ -611,12 +600,7 @@ class Project:
         if self.settings.asset_mode == "shared" and "css" not in page and "template" not in page:
             stylesheet = self._output_root() / "assets/md2html/page.css"
             page_stylesheets.append(Path(os.path.relpath(stylesheet, target.parent)).as_posix())
-        context = {
-            "site": self.site,
-            "page": page,
-            "content": rendered.content,
-            "md2html": {**md2html, "css": css, "page_stylesheets": page_stylesheets},
-        }
+        context["md2html"].update(css=css, page_stylesheets=page_stylesheets)
         try:
             return self.liquid.from_string(liquid_source(path.read_text(encoding="utf-8"))).render(**context)
         except LiquidError as error:
@@ -635,6 +619,7 @@ class Project:
             "has_toc": features.toc,
             "has_images": features.images,
             "has_warnings": features.warning,
+            "has_math_copy": features.math_copy,
         }
 
     @staticmethod
@@ -691,14 +676,14 @@ class Project:
         if template is None:
             raise ValueError(f"template not found: {self.settings.template}")
         features = Features(code=True, math=True, toc=True, images=True, warning=True)
-        rendered = Rendered("", "", features)
+        rendered = Rendered("", features)
         css = self._css(rendered, template, {}, shared=False).rstrip() + "\n"
         relative = Path("assets/md2html/page.css")
         root = self.settings.output if self.settings.input.is_dir() else self.settings.output.parent
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.is_file() or target.read_text(encoding="utf-8") != css:
-            self._write_text(target, css)
+            atomic_write(target, css)
             result.written.append(target)
         self.shared_dependencies = rendered.dependencies
 
@@ -715,13 +700,19 @@ class Project:
             if "://" not in name and not name.startswith("//"):
                 self._track_css((self.source_root if name.startswith("/") else path.parent) / name.lstrip("/"), dependencies)
 
-    @staticmethod
-    def _font_family(name: str) -> str:
-        return "MJX-BRK" if name == "brk" else "MJX-TEX-" + name.upper()
-
-    def _selected_math_css(self, features: Features, fonts: set[str]) -> str:
-        families = {self._font_family(name) for name in fonts}
-        return FONT_FACE.sub(lambda match: match.group(0) if match.group(1) in families else "", features.math_css)
+    def _math_css(self, features: Features, fonts: set[str], delivery: str) -> str:
+        families = {"MJX-BRK" if name == "brk" else "MJX-TEX-" + name.upper() for name in fonts}
+        css = FONT_FACE.sub(lambda match: match.group(0) if match.group(1) in families else "", features.math_css)
+        if self.settings.math.chtml_fonts == "none":
+            return FONT_FACE.sub("", css)
+        if delivery == "remote":
+            return css.replace("mathjax/woff2", CHTML_CDN)
+        if delivery == "inline" and features.math_font_dir:
+            for name in fonts:
+                filename = f"mjx-tex-{name}.woff2"
+                encoded = base64.b64encode((features.math_font_dir / filename).read_bytes()).decode("ascii")
+                css = css.replace(f'url("mathjax/woff2/{filename}")', f'url("data:font/woff2;base64,{encoded}")')
+        return css
 
     def _renderer_context(self, rendered: Rendered, target: Path, result: BuildResult) -> dict[str, Any]:
         context: dict[str, Any] = {
@@ -804,31 +795,19 @@ class Project:
 
     def _prune_browser_mathjax(self) -> None:
         if not self.browser_mathjax or self.settings.asset_mode != "shared":
-            (self._output_root() / "assets/md2html/mathjax.js").unlink(missing_ok=True)
-            root = self._output_root() / "assets/md2html/mathjax-newcm-font"
-            if root.exists():
-                shutil.rmtree(root)
-            speech = self._output_root() / "assets/md2html/sre"
-            if speech.exists():
-                shutil.rmtree(speech)
+            asset_root = self._output_root() / "assets/md2html"
+            (asset_root / "mathjax.js").unlink(missing_ok=True)
+            for path in (asset_root / "mathjax-newcm-font", asset_root / "sre"):
+                if path.exists():
+                    shutil.rmtree(path)
 
     def _standalone_math_css(self, features: Features) -> str:
         mode = self.settings.math.chtml_fonts
         fonts = set(features.math_fonts)
         if mode == "all" and features.math_font_dir:
             fonts = {path.stem.removeprefix("mjx-tex-") for path in features.math_font_dir.glob("mjx-tex-*.woff2")}
-        css = self._selected_math_css(features, fonts)
-        if mode == "none":
-            return FONT_FACE.sub("", css)
         local = mode in {"all", "inline", "local"} or mode == "auto" and self.settings.asset_mode == "standalone"
-        if local and features.math_font_dir:
-            for name in fonts:
-                filename = f"mjx-tex-{name}.woff2"
-                source = features.math_font_dir / filename
-                encoded = base64.b64encode(source.read_bytes()).decode("ascii")
-                css = css.replace(f'url("mathjax/woff2/{filename}")', f'url("data:font/woff2;base64,{encoded}")')
-            return css
-        return css.replace("mathjax/woff2", CHTML_CDN)
+        return self._math_css(features, fonts, "inline" if local else "remote")
 
     def _write_math_assets(self, features: Features, result: BuildResult, page_target: Path) -> tuple[str, list[str]]:
         mode = self.settings.math.chtml_fonts
@@ -839,19 +818,11 @@ class Project:
         fonts = set(self.math_fonts)
         if mode in {"auto", "all", "local"} and features.math_font_dir:
             fonts = {path.stem.removeprefix("mjx-tex-") for path in features.math_font_dir.glob("mjx-tex-*.woff2")}
-        css = self._selected_math_css(features, fonts)
+        delivery = mode if mode in {"inline", "remote"} else "local"
+        css = self._math_css(features, fonts, delivery)
         if self.settings.site_mode:
             css = (self.bundled_assets / "feature-math.css").read_text(encoding="utf-8") + "\n" + css
-        if mode == "none":
-            css = FONT_FACE.sub("", css)
-        elif mode == "remote" or mode == "auto" and self.settings.asset_mode == "cdn":
-            css = css.replace("mathjax/woff2", CHTML_CDN)
-        elif mode == "inline" and features.math_font_dir:
-            for name in fonts:
-                filename = f"mjx-tex-{name}.woff2"
-                encoded = base64.b64encode((features.math_font_dir / filename).read_bytes()).decode("ascii")
-                css = css.replace(f'url("mathjax/woff2/{filename}")', f'url("data:font/woff2;base64,{encoded}")')
-        elif features.math_font_dir:
+        if delivery == "local" and mode != "none" and features.math_font_dir:
             if first:
                 old = root / "assets/md2html/mathjax"
                 if old.exists():
@@ -859,17 +830,13 @@ class Project:
             for name in fonts:
                 source = features.math_font_dir / f"mjx-tex-{name}.woff2"
                 target = root / "assets/md2html/mathjax/woff2" / source.name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if not target.exists() or target.read_bytes() != source.read_bytes():
-                    shutil.copy2(source, target)
-                if target not in result.copied:
-                    result.copied.append(target)
+                self._copy_asset(source, target, result)
 
         relative = Path("assets/md2html/mathjax-chtml.css")
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         css = minify_css(css) if self.settings.minify_css else css.rstrip()
-        self._write_text(target, css + "\n")
+        atomic_write(target, css + "\n")
         if target not in result.written:
             result.written.append(target)
         stylesheet = self._asset_url(target, page_target)
@@ -883,13 +850,9 @@ class Project:
         mode = self.settings.math.chtml_fonts
         if not self.math_fonts:
             stylesheet.unlink(missing_ok=True)
+        if not self.math_fonts or mode in {"remote", "inline", "none"}:
             if font_root.parent.exists():
                 shutil.rmtree(font_root.parent)
-            return
-        if mode in {"remote", "inline", "none"}:
-            if font_root.parent.exists():
-                shutil.rmtree(font_root.parent)
-            return
 
     def _target(self, page: Page, output_relative: Path | None = None) -> Path:
         if self.settings.input.is_file():
@@ -949,5 +912,5 @@ class Project:
             entries.append(f'<entry><title>{title}</title><link href="{html.escape(url)}"/><id>{html.escape(url)}</id><updated>{self._date(post).isoformat()}</updated></entry>')
         feed = f'<?xml version="1.0" encoding="utf-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom"><title>{html.escape(str(self.site.get("title", "")))}</title>{"".join(entries)}</feed>\n'
         target.parent.mkdir(parents=True, exist_ok=True)
-        self._write_text(target, feed)
+        atomic_write(target, feed)
         result.written.append(target)

@@ -3,7 +3,7 @@
 ## Summary
 
 md2html2 covers the core md2html renderer and static-site workflow with about
-57% less production Python: approximately 2,362 lines instead of 5,534. Its
+55% less production Python: approximately 2,477 lines instead of 5,534. Its
 architecture is better organized around immutable settings, one project model,
 one content renderer, and one execution/cache implementation.
 
@@ -25,7 +25,7 @@ dependency tracking, asset handling, error recovery, and watch/serve behavior
 are materially better in md2html2. Restoring every original configuration knob
 would add complexity without improving the central architecture.
 
-Both current test suites pass: 149 tests in md2html and 74 tests in md2html2.
+Both current test suites pass.
 
 ## Feature comparison
 
@@ -139,7 +139,6 @@ md2html2 has distinct and consistently ordered document paths:
 - `--no-liquid` disables source Liquid for the whole build;
 - fenced code, inline code, comments, raw `pre` blocks, and highlight blocks
   are protected before directives and Liquid;
-- adjacent blockquotes are normalized to the expected rendering; and
 - malformed single-line `@src(...)` tags produce visible page errors while the
   rest of the page continues.
 

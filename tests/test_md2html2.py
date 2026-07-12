@@ -81,6 +81,7 @@ def test_build_time_math_backends(tmp_path: Path, backend: str, marker: str):
     assert '<span class="math-copy-source">$x+1$</span>' in output
     assert "math-rendered" in output and 'aria-hidden="true"' in output
     assert "data-md2html-math-copy" in output
+    assert output.index("</article>") < output.index("data-md2html-math-copy")
     assert "tex-mml-chtml.js" not in output
     if backend == "svg":
         assert "--md2html-math-svg-inline-align:" in output and 'fill="currentColor"' in output
@@ -506,7 +507,7 @@ def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
     )
     (source / "site.js").write_text("// reader controls\n", encoding="utf-8")
     (source / "_layouts" / "default.html").write_text(
-        "<!doctype html><html><head>{% include head.html %}</head><body>{% if md2html.jekyll_compatibility %}md2html compatibility{% endif %}{{ content }}</body></html>", encoding="utf-8"
+        "<!doctype html><html><head>{% include head.html %}</head><body>{% if md2html.jekyll_compatibility %}md2html compatibility{% endif %}{{ content }}{% if md2html.has_math_copy %}{% include 'math-copy.html' %}{% endif %}</body></html>", encoding="utf-8"
     )
     (source / "_layouts" / "post.html").write_text(
         "---\nlayout: default\n---\n<article><h1>{{ page.title }}</h1>{{ content }}</article>", encoding="utf-8"
@@ -853,6 +854,7 @@ def test_native_site_deduplicates_mathjax_styles(tmp_path: Path):
     assert 'rel="preload" href="/assets/md2html/mathjax/woff2/mjx-tex-n.woff2"' in post
     assert post.index("data-hash-pending") < post.index("mathjax-chtml.css") < post.index('src="/site.js"')
     assert "<mjx-container" in post
+    assert "data-md2html-math-copy" in post
     assert "MJX-CHTML-styles" not in post
 
 
@@ -972,6 +974,7 @@ def test_custom_template_can_omit_math_renderer_assets(tmp_path: Path):
     output = build_one(tmp_path, "$x^2$\n", templates=(templates,))
     assert "<mjx-container" in output
     assert "@font-face" not in output
+    assert "data-md2html-math-copy" not in output
 
     (templates / "page.html").write_text(
         "<style>{{ md2html.css }}</style><style>{{ md2html.math_css }}</style>{{ content }}"

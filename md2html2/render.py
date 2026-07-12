@@ -27,7 +27,7 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
-from .settings import Settings, normal_path
+from .settings import Settings, atomic_write, normal_path
 
 
 FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
@@ -47,23 +47,6 @@ TOC = re.compile(r"^[ \t]*@toc[ \t]*$", re.MULTILINE)
 HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
 EXERCISE = re.compile(r"^exercise\b", re.IGNORECASE)
 ALIGN = re.compile(r"\\begin\{(align\*?|gather\*?|multline\*?|equation\*?)\}.*?\\end\{\1\}", re.DOTALL)
-MATH_COPY_SCRIPT = """<script data-md2html-math-copy>
-(function () {
-  document.addEventListener("copy", function (event) {
-    var selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
-    var fragment = selection.getRangeAt(0).cloneContents();
-    if (!fragment.querySelector || !fragment.querySelector(".math-copy-source")) return;
-    fragment.querySelectorAll(".math-rendered").forEach(function (node) { node.remove(); });
-    var box = document.createElement("div");
-    box.appendChild(fragment);
-    event.clipboardData.setData("text/plain", box.textContent);
-    event.clipboardData.setData("text/html", box.innerHTML);
-    event.preventDefault();
-  });
-})();
-</script>"""
-
 LANGUAGE_ALIASES = {"wl": "mathematica", "mma": "mathematica", "rkt": "racket", "py": "python", "js": "javascript"}
 LANGUAGE_SUFFIXES = {"python": ".py", "py": ".py", "javascript": ".js", "js": ".js", "racket": ".rkt", "cpp": ".cpp", "c++": ".cpp", "c": ".c", "bash": ".sh", "shell": ".sh", "sh": ".sh", "wl": ".wl", "mathematica": ".wl"}
 COMMANDS = {
@@ -174,7 +157,6 @@ class Features:
 @dataclass
 class Rendered:
     content: str
-    title: str
     features: Features
     dependencies: set[Path] = field(default_factory=set)
     assets: dict[Path, Path] = field(default_factory=dict)
@@ -189,16 +171,15 @@ class Stash:
 
     def put(self, value: str, *, block: bool) -> str:
         self.serial += 1
-        key = f"m{self.serial}"
-        self.values[key] = value
         tag = "div" if block else "span"
+        placeholder = f'<{tag} data-md2html-token="m{self.serial}"></{tag}>'
+        self.values[placeholder] = value
         suffix = "\n" if block else ""
-        return f'<{tag} data-md2html-token="{key}"></{tag}>{suffix}'
+        return placeholder + suffix
 
     def restore(self, text: str) -> str:
-        for key, value in self.values.items():
-            for tag in ("div", "span"):
-                text = text.replace(f'<{tag} data-md2html-token="{key}"></{tag}>', value)
+        for placeholder, value in self.values.items():
+            text = text.replace(placeholder, value)
         return text
 
 
@@ -377,9 +358,7 @@ class Executor:
             manifest = self.cache / "manifest.json"
             if existing:
                 value = {"page": self.page.as_posix(), "workspaces": existing}
-                temporary = manifest.with_suffix(".tmp")
-                temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-                temporary.replace(manifest)
+                atomic_write(manifest, json.dumps(value, indent=2, sort_keys=True) + "\n")
             else:
                 manifest.unlink(missing_ok=True)
                 self._remove_empty_parents(self.cache, self.pages_root(self.settings))
@@ -498,10 +477,7 @@ class ContentRenderer:
             md = mistune.create_markdown(renderer=renderer, plugins=["strikethrough", "table", "task_lists", "url"])
             output = md(body)
         output = stash.restore(output)
-        if features.math_copy:
-            output += MATH_COPY_SCRIPT
-        title = str(context.get("page", {}).get("title") or source.name)
-        return Rendered(output, title, features, dependencies, assets, warnings, executor)
+        return Rendered(output, features, dependencies, assets, warnings, executor)
 
     def render_liquid(self, source: Path, body: str, context: dict[str, Any], *, parse_liquid: bool = True) -> Rendered:
         warnings: list[str] = []
@@ -510,8 +486,7 @@ class ContentRenderer:
                 body = self.liquid.from_string(liquid_source(body)).render(**context)
             except LiquidError as error:
                 warnings.append(f"template expression failed in {source}: {error}")
-        title = str(context.get("page", {}).get("title") or source.name)
-        return Rendered(body, title, Features(), {source}, warnings=warnings)
+        return Rendered(body, Features(), {source}, warnings=warnings)
 
     def _resolve_reference(self, name: str, origin: Path) -> Path:
         path = normal_path(Path(name).expanduser())

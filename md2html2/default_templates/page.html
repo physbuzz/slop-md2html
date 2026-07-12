@@ -96,6 +96,7 @@
 {{ content }}
     </article>
   </main>
+  {% if md2html.has_math_copy %}{% include "math-copy.html" %}{% endif %}
   <script>
 (function () {
   var groups = ["theme", "width", "type", "text"];

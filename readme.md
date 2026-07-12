@@ -676,6 +676,10 @@ The bundled templates are:
   styles, and a filename header.
 - `barebones.html`: A simpler centered reading page without the reader widget.
 
+Both use the internal `math-copy.html` partial when rendered math has a
+copyable TeX source. A template may omit that include without changing the
+rendered article content.
+
 The page remains readable when JavaScript is disabled. The default reader
 controls use standard HTML and CSS; JavaScript saves the selected theme, measure,
 typeface, and text size between pages.
@@ -823,6 +827,7 @@ Standalone templates receive:
 | `md2html.has_toc` | True when this page contains a generated table of contents. |
 | `md2html.has_images` | True when rendered page content contains an image. |
 | `md2html.has_warnings` | True when rendered page content contains a generated warning. |
+| `md2html.has_math_copy` | True when rendered math has a hidden copyable TeX source. |
 
 The bundled templates show the Liquid structure for `<title>`, authored
 stylesheets, selected CSS, math assets, browser MathJax, the filename header,
