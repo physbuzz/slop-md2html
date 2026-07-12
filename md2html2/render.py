@@ -459,7 +459,7 @@ class ContentRenderer:
 
         if TOC.search(body):
             features.toc = True
-            toc = self._toc(body, markdown=output_markdown)
+            toc = self._toc(body)
             body = TOC.sub(stash.put(toc, block=True), body)
 
         if parse_liquid and not output_markdown:
@@ -676,7 +676,7 @@ class ContentRenderer:
         return ALIGN.sub(lambda match: emit(match.group(0), True), "".join(result))
 
     @staticmethod
-    def _toc(body: str, *, markdown: bool = False) -> str:
+    def _toc(body: str) -> str:
         headings: list[TocHeading] = []
         seen: dict[str, int] = {}
         for match in HEADING.finditer(body):
@@ -700,21 +700,6 @@ class ContentRenderer:
             node = TocNode(heading)
             stack[-1][1].append(node)
             stack.append((heading.level, node.children))
-
-        if markdown:
-            lines = ["## Directory"]
-
-            def render_markdown(nodes: list[TocNode], depth: int = 0) -> None:
-                for node in nodes:
-                    heading = node.heading
-                    lines.append("  " * depth + f"- [{heading.label}](#{heading.identifier})")
-                    if heading.label.lower() == "exercises" and exercises:
-                        links = ", ".join(f"[{item.label}](#{item.identifier})" for item in exercises)
-                        lines.append("  " * (depth + 1) + f"- *Exercises:* ({links})")
-                    render_markdown(node.children, depth + 1)
-
-            render_markdown(roots)
-            return "\n".join(lines)
 
         def link(heading: TocHeading, class_name: str = "") -> str:
             attribute = f' class="{class_name}"' if class_name else ""

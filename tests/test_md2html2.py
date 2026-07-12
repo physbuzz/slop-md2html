@@ -735,7 +735,8 @@ def test_jekyll_markdown_preserves_markdown_and_expands_md2html_syntax(tmp_path:
 
     markdown = (output / "index.md").read_text()
     assert markdown.startswith("---\nlayout: default\nrender_with_liquid: false\ntitle: index.md\n---")
-    assert "## Directory" in markdown and "[Included](#included)" in markdown
+    assert '<div class="table-of-contents">' in markdown
+    assert '<a href="#included">Included</a>' in markdown
     assert '<div class="codehilite"><pre>' in markdown and "markdown execution" in markdown
     assert "inline-source" in markdown and "inline markdown" in markdown
     assert "@src(program.py" not in markdown and "@src-begin" not in markdown and "@src-end" not in markdown
