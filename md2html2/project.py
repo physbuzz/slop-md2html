@@ -20,7 +20,7 @@ from pygments.formatters import HtmlFormatter
 from pygments.util import ClassNotFound
 import yaml
 
-from .render import FRONTMATTER, ContentRenderer, Executor, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
+from .render import FRONTMATTER, ContentRenderer, Features, Rendered, TrackingLoader, liquid_source, make_liquid, parse_frontmatter, slugify
 from .settings import MARKDOWN_SUFFIXES, PAGE_SUFFIXES, Settings, atomic_write, normal_path, page_output
 
 
@@ -215,8 +215,6 @@ class Project:
             self._copy_static(pages, result)
         if self.settings.site_mode and (only is None or any(page.relative.parts[:1] == ("_posts",) for page in selected)):
             self._write_feed(pages, result)
-        if only is None and self.settings.input.is_dir():
-            self._prune_execution_pages(pages, result.warnings)
         return result
 
     def _validate_paths(self) -> None:
@@ -438,7 +436,7 @@ class Project:
         parse_liquid = self.settings.parse_liquid and page.metadata.get("render_with_liquid", True) is not False
         markdown = page.source.suffix.lower() in MARKDOWN_SUFFIXES
         rendered = (
-            self.renderer.render(page.source, page.body, context, cache_page=output_relative, parse_liquid=parse_liquid)
+            self.renderer.render(page.source, page.body, context, parse_liquid=parse_liquid)
             if markdown else self.renderer.render_liquid(page.source, page.body, context, parse_liquid=parse_liquid)
         )
         context["content"] = rendered.content
@@ -533,23 +531,6 @@ class Project:
         value = LINK_ASSET.sub(media, value)
         return MEDIA_ASSET.sub(media, SCRIPT_ASSET.sub(script, value))
 
-    def _prune_execution_pages(self, pages: list[Page], warnings: list[str]) -> None:
-        root = Executor.pages_root(self.settings)
-        active = {Executor.page_root(self.settings, page.output_relative) for page in pages}
-        if root.exists():
-            for manifest in list(root.rglob("manifest.json")):
-                page_root = manifest.parent
-                if page_root not in active:
-                    try:
-                        shutil.rmtree(page_root)
-                    except OSError as error:
-                        warnings.append(f"could not remove stale execution page {page_root}: {error}")
-            directories = (path for path in root.rglob("*") if path.is_dir())
-            for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
-                with suppress(OSError):
-                    directory.rmdir()
-            with suppress(OSError):
-                root.rmdir()
     def _apply_layouts(self, source: Path, rendered: Rendered, context: dict[str, Any]) -> str:
         page = context["page"]
         content = context["content"]

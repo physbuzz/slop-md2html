@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import html
-import json
 import os
 from pathlib import Path
 import re
@@ -27,7 +26,7 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
-from .settings import Settings, atomic_write, normal_path
+from .settings import Settings, normal_path
 
 
 FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
@@ -262,7 +261,7 @@ class Executor:
         self.settings = settings
         self.warn = warn
         self.page = page
-        self.cache = self.page_root(settings, page)
+        self.cache = self.page_root(page)
         self.active: set[Path] = set()
         self.cleanup_safe = True
 
@@ -271,13 +270,8 @@ class Executor:
         return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-.") or "source"
 
     @classmethod
-    def pages_root(cls, settings: Settings) -> Path:
-        return settings.project_root / ".md2html-cache" / "pages"
-
-    @classmethod
-    def page_root(cls, settings: Settings, page: Path) -> Path:
-        parts = [cls._slug(part) for part in page.parts if part not in {"", ".", "..", page.anchor}]
-        return cls.pages_root(settings).joinpath(*(parts or ["index.html"]))
+    def page_root(cls, page: Path) -> Path:
+        return page.parent / ".md2html-cache" / cls._slug(page.stem)
 
     def _workspace(self, source: Path, code: str, language: str, inline: bool) -> tuple[Path, str]:
         slug = self._slug(language or "source") if inline else self._slug(source.stem)
@@ -294,7 +288,6 @@ class Executor:
         output_path = builddir / "output.txt"
         complete = builddir / ".complete"
         if use_cache and output_path.is_file() and complete.is_file() and (not self.settings.force or not enabled):
-            complete.touch()
             return output_path.read_text(encoding="utf-8")
         if not enabled:
             return None
@@ -343,7 +336,7 @@ class Executor:
             return None
 
     def finish(self) -> None:
-        if not self.cleanup_safe:
+        if not self.settings.execute or not self.cleanup_safe:
             return
         try:
             if not self.cache.exists():
@@ -354,14 +347,8 @@ class Executor:
                         shutil.rmtree(path)
                     except OSError as error:
                         self.warn(f"could not remove stale execution workspace {path}: {error}")
-            existing = sorted(path.name for path in self.active if path.is_dir())
-            manifest = self.cache / "manifest.json"
-            if existing:
-                value = {"page": self.page.as_posix(), "workspaces": existing}
-                atomic_write(manifest, json.dumps(value, indent=2, sort_keys=True) + "\n")
-            else:
-                manifest.unlink(missing_ok=True)
-                self._remove_empty_parents(self.cache, self.pages_root(self.settings))
+            if not any(path.is_dir() for path in self.active):
+                self._remove_empty_parents(self.cache, self.cache.parent)
         except OSError as error:
             self.warn(f"could not clean execution cache for {self.page}: {error}")
 
@@ -381,8 +368,7 @@ class ContentRenderer:
         self.liquid = liquid
 
     def render(
-        self, source: Path, body: str, context: dict[str, Any], *, cache_page: Path,
-        parse_liquid: bool = True,
+        self, source: Path, body: str, context: dict[str, Any], *, parse_liquid: bool = True,
     ) -> Rendered:
         output_markdown = self.settings.markdown_mode
         self._validate_source_blocks(source, body)
@@ -391,7 +377,7 @@ class ContentRenderer:
         dependencies: set[Path] = {source}
         assets: dict[Path, Path] = {}
         warnings: list[str] = []
-        executor = Executor(self.settings, cache_page, warnings.append)
+        executor = Executor(self.settings, source, warnings.append)
 
         def malformed_src(match: re.Match[str]) -> str:
             line = body.count("\n", 0, match.start()) + 1

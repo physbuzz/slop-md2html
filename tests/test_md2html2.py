@@ -29,8 +29,9 @@ def build_one(tmp_path: Path, text: str, **changes) -> str:
     return result.written[0].read_text(encoding="utf-8")
 
 
-def page_cache(tmp_path: Path, relative: str = "article.html") -> Path:
-    return tmp_path / ".md2html-cache" / "pages" / relative
+def page_cache(tmp_path: Path, relative: str = "article.md") -> Path:
+    source = tmp_path / relative
+    return source.parent / ".md2html-cache" / source.stem
 
 
 def workspaces(page: Path) -> list[Path]:
@@ -431,7 +432,62 @@ def test_page_rebuild_prunes_removed_inline_workspace(tmp_path: Path):
     assert not original[1].exists()
 
 
-def test_failed_execution_still_allows_website_shaped_cache_cleanup(tmp_path: Path):
+def test_execution_disabled_preserves_unused_workspaces(tmp_path: Path):
+    first = "@src-begin(python, execute)\nprint('one')\n@src-end\n"
+    second = "@src-begin(python, execute)\nprint('two')\n@src-end\n"
+    build_one(tmp_path, first + "\n" + second, execute=True)
+    cache = page_cache(tmp_path)
+    original = workspaces(cache)
+    timestamps = {path.relative_to(cache): path.stat().st_mtime_ns for path in cache.rglob("*")}
+
+    output = build_one(tmp_path, first)
+
+    assert "one" in output
+    assert workspaces(cache) == original
+    assert {path.relative_to(cache): path.stat().st_mtime_ns for path in cache.rglob("*")} == timestamps
+
+
+def test_failed_execution_still_prunes_stale_workspaces_for_that_page(tmp_path: Path):
+    command = "printf 'kept for inspection' > failed.txt; printf 'intentional failure' >&2; exit 1"
+    build_one(
+        tmp_path, "@src-begin(fail, execute)\nfirst\n@src-end\n",
+        execute=True, commands={"fail": command},
+    )
+    cache = page_cache(tmp_path)
+    original = workspaces(cache)
+
+    build_one(
+        tmp_path, "@src-begin(fail, execute)\nsecond\n@src-end\n",
+        execute=True, commands={"fail": command},
+    )
+
+    remaining = workspaces(cache)
+    assert len(remaining) == 1 and remaining != original
+    assert not original[0].exists()
+    assert (remaining[0] / "failed.txt").is_file()
+
+
+def test_source_directory_owns_each_page_cache(tmp_path: Path):
+    source = tmp_path / "a"
+    output = tmp_path / "public"
+    source.mkdir()
+    (source / "mysource.py").write_text("print('shared output')\n", encoding="utf-8")
+    for name in ("index1.md", "index2.md"):
+        (source / name).write_text("@src(mysource.py, execute)\n", encoding="utf-8")
+    settings = Settings(
+        input=source, output=output, project_root=tmp_path, recursive=True, execute=True,
+    )
+
+    Project(settings).build()
+
+    for name in ("index1", "index2"):
+        cached = workspaces(source / ".md2html-cache" / name)
+        assert len(cached) == 1
+        assert (cached[0] / "output.txt").read_text() == "shared output\n"
+    assert not (tmp_path / ".md2html-cache").exists()
+
+
+def test_deleted_page_cache_waits_for_explicit_cleanup(tmp_path: Path):
     source = tmp_path / "content"
     output = tmp_path / "public"
     for section in ("guide", "reference"):
@@ -447,8 +503,8 @@ def test_failed_execution_still_allows_website_shaped_cache_cleanup(tmp_path: Pa
     )
     result = Project(settings).build()
     assert len(result.warnings) == 2
-    guide = page_cache(tmp_path, "guide/index.html")
-    reference = page_cache(tmp_path, "reference/index.html")
+    guide = page_cache(source, "guide/index.md")
+    reference = page_cache(source, "reference/index.md")
     assert (workspaces(guide)[0] / "failed.txt").is_file()
     assert (workspaces(reference)[0] / "failed.txt").is_file()
 
@@ -456,7 +512,7 @@ def test_failed_execution_still_allows_website_shaped_cache_cleanup(tmp_path: Pa
     result = Project(settings).build()
     assert any("intentional failure" in warning for warning in result.warnings)
     assert guide.is_dir()
-    assert not reference.exists()
+    assert reference.is_dir()
 
 
 def test_unterminated_source_block_preserves_page_cache(tmp_path: Path):

@@ -487,14 +487,15 @@ warning. It does not stop other pages or prevent completed cache cleanup.
 Each block runs in a persistent directory below:
 
 ```text
-.md2html-cache/pages/PAGE_OUTPUT/LANGUAGE-SOURCE_CHECKSUM/
+SOURCE_DIRECTORY/.md2html-cache/PAGE_NAME/LANGUAGE-SOURCE_CHECKSUM/
 ```
 
-For example, executable blocks in `guide/index.html` use
-`.md2html-cache/pages/guide/index.html/`. md2html copies inline source into its
-workspace. File-backed source is referenced from that workspace. Compilers,
-executables, images, and other files made with relative paths remain there and
-do not pollute the source directory.
+For example, executable blocks in `guide/index.md` use
+`guide/.md2html-cache/index/`. Two pages in one directory receive separate page
+directories. md2html copies inline source into its workspace. File-backed
+source is referenced from that workspace, but its cached output belongs to the
+page containing the directive. Compilers, executables, images, and other files
+made with relative paths remain there and do not pollute the source directory.
 
 The cache key uses the source text. It does not include checkout paths,
 interpreter paths, commands, settings, or md2html metadata. Changing source
@@ -503,8 +504,8 @@ compiler, runtime, or other external input that should refresh existing output.
 
 md2html saves successful output as `output.txt` and marks it complete. Later
 builds include it even when execution is disabled. A CI job can restore or
-check out `.md2html-cache` and build pages without installing compilers or
-enabling execution:
+check out the source tree's `.md2html-cache` directories and build pages
+without installing compilers or enabling execution:
 
 ```bash
 md2html --config md2html.json
@@ -513,8 +514,10 @@ md2html --config md2html.json
 If an `execute` block has no completed output while execution is disabled,
 md2html builds the page and prints a warning explaining how to populate it.
 After a successful page render, it removes block workspaces no longer used by
-that page. A complete directory build also removes cache directories for pages
-that no longer exist. A parse or rendering failure preserves that page's cache.
+that page only when execution is enabled. A build with execution disabled never
+deletes cached workspaces. Deleting a page leaves its cache in place until the
+project's clean command removes `.md2html-cache` directories. A parse or
+rendering failure also preserves that page's cache.
 
 ### Commands And Output
 

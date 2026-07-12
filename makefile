@@ -30,4 +30,5 @@ test:
 	.venv/bin/python -m pytest -q
 
 clean:
-	rm -rf build dist *.spec *.egg-info .pytest_cache .md2html-cache
+	rm -rf build dist *.spec *.egg-info .pytest_cache
+	find . -type d -name .md2html-cache -prune -exec rm -rf {} +
