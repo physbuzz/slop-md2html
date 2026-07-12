@@ -802,7 +802,8 @@ the selected styles and adds it only when the page or shared stylesheet needs
 code highlighting. Native layouts receive the selected token rules through
 `md2html.css`; place that value after the site's structural code-block CSS.
 
-Highlighted fences use a `codehilite` wrapper. Source directives use a
+Highlighted fences use a `codehilite fenced-code` wrapper. A fence with an info
+string also receives a small `code-language` label. Source directives use a
 `code-box` containing `code-header`, `codehilite`, and, when available,
 `code-output`. Collapsible source uses `collapsible-code` inside the same
 `code-box`. Use these class names from custom CSS.

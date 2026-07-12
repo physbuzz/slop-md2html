@@ -199,6 +199,12 @@ def code_html(code: str, language: str = "text", filename: Path | None = None) -
     return highlight(code.rstrip("\n") + "\n", _lexer(language, filename), HtmlFormatter(cssclass="codehilite"))
 
 
+def fenced_code_html(code: str, language: str, label: str | None) -> str:
+    markup = code_html(code, language)
+    header = f'\n<div class="code-language">{html.escape(label)}</div>' if label else ""
+    return markup.replace('<div class="codehilite">', f'<div class="codehilite fenced-code">{header}', 1)
+
+
 def _multiline_math(source: str) -> bool:
     compact = re.sub(r"\s+", "", source)
     return "\\\\" in source or any(f"\\begin{{{name}" in compact for name in ("align", "aligned", "gather", "split", "multline"))
@@ -400,8 +406,11 @@ class ContentRenderer:
             features.code = True
             if output_markdown:
                 return stash.put(match.group(0), block=True)
-            language = match.group(3).strip().split(maxsplit=1)[0] if match.group(3).strip() else "text"
-            return stash.put(code_html(match.group(4), language), block=True)
+            info = match.group(3).strip().split(maxsplit=1)[0] if match.group(3).strip() else ""
+            language = info or "text"
+            label = LANGUAGE_ALIASES.get(info.lower(), info.lower()) if info else None
+            label = "c++" if label == "cpp" else label
+            return stash.put(fenced_code_html(match.group(4), language, label), block=True)
 
         body = FENCE.sub(protect_fence, body)
         body = INLINE_CODE.sub(

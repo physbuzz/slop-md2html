@@ -173,10 +173,21 @@ def test_adjacent_blockquotes_follow_markdown_renderer_output(tmp_path: Path):
 
 def test_highlighted_code_uses_one_box(tmp_path: Path):
     output = build_one(tmp_path, "# Code\n\n```python\nprint('hello')\n```\n")
-    assert '<div class="codehilite"><pre>' in output
+    assert '<div class="codehilite fenced-code">\n<div class="code-language">python</div><pre>' in output
     assert '<div class="code-box">' not in output
     assert ".codehilite .k{color:#008000;font-weight:bold}" in output
     assert 'html[data-theme="dark"] .codehilite .k' in output
+
+
+def test_fenced_code_labels_normalize_aliases_and_remain_optional(tmp_path: Path):
+    output = build_one(
+        tmp_path,
+        "```cpp\nint main() {}\n```\n\n```rkt\n#lang racket\n```\n\n```\nplain\n```\n",
+    )
+    assert '<div class="code-language">c++</div>' in output
+    assert '<div class="code-language">racket</div>' in output
+    assert output.count('class="code-language"') == 2
+    assert output.count('class="codehilite fenced-code"') == 3
 
 
 def test_inline_source_uses_the_code_box_contract(tmp_path: Path):
