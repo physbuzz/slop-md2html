@@ -22,7 +22,7 @@ DEFAULT_STYLES = {"pygments": ("default", "github-dark"), "rouge": ("github.ligh
 
 class Rouge:
     def __init__(self) -> None:
-        script = files("md2html2").joinpath("scripts/rouge.rb")
+        script = files("md2html").joinpath("scripts/rouge.rb")
         self.worker = JsonWorker(
             ["ruby", Path(str(script))], missing="Rouge needs Ruby",
             unavailable="Rouge is unavailable; install it with gem install rouge",

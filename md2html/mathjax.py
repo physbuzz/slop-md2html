@@ -20,8 +20,8 @@ class Chtml:
 
 class MathJax:
     def __init__(self, project_root: Path) -> None:
-        script = files("md2html2").joinpath("scripts/mathjax-chtml.mjs")
-        package_root = Path(str(files("md2html2"))).parent
+        script = files("md2html").joinpath("scripts/mathjax-chtml.mjs")
+        package_root = Path(str(files("md2html"))).parent
         roots = (project_root.absolute(), *project_root.absolute().parents, package_root)
         node_modules = next((root / "node_modules" for root in roots if (root / "node_modules/mathjax").is_dir()), project_root / "node_modules")
         self.worker = JsonWorker(

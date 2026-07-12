@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "md2html2"
+name = "md2html"
 version = "2.0.0a1"
 description = "A small, native Markdown page and static-site builder."
 readme = "readme.md"
@@ -24,14 +24,14 @@ dev = ["pytest>=7"]
 build = ["pyinstaller>=6"]
 
 [project.scripts]
-md2html = "md2html2.cli:main"
+md2html = "md2html.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["md2html2*"]
+include = ["md2html*"]
 
 [tool.setuptools.package-data]
-md2html2 = ["assets/*.css", "default_templates/*.html", "scripts/*.mjs", "scripts/*.rb"]
+md2html = ["assets/*.css", "default_templates/*.html", "scripts/*.mjs", "scripts/*.rb"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

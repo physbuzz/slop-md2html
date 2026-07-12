@@ -53,7 +53,7 @@ wheel in a virtual environment:
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install /path/to/md2html2
+python -m pip install /path/to/md2html
 ```
 
 Install an editable checkout with the test dependencies for development:
@@ -1248,7 +1248,7 @@ print it to standard output. Existing files are not overwritten unless
 
 ```python
 from pathlib import Path
-from md2html2 import Project, Settings
+from md2html import Project, Settings
 
 settings = Settings.single(Path("article.md"))
 result = Project(settings).build()
@@ -1256,7 +1256,7 @@ print(result.written)
 ```
 
 `Settings` is immutable. Use `Settings.single()` for one page, construct
-`Settings` for a directory, or use `load_settings()` from `md2html2.settings`
+`Settings` for a directory, or use `load_settings()` from `md2html.settings`
 to read `md2html.json`.
 
 `Project.build()` returns a `BuildResult` containing written files, copied

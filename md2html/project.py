@@ -145,8 +145,8 @@ class Project:
         self.settings = settings
         self.source_root = settings.input if settings.input.is_dir() else settings.input.parent
         self.site_config = self.source_root / "_config.yml"
-        self.bundled_templates = Path(str(files("md2html2").joinpath("default_templates")))
-        self.bundled_assets = Path(str(files("md2html2").joinpath("assets")))
+        self.bundled_templates = Path(str(files("md2html").joinpath("default_templates")))
+        self.bundled_assets = Path(str(files("md2html").joinpath("assets")))
         self.site = self._site_data()
         template_dirs = [
             *settings.templates,
@@ -740,10 +740,10 @@ class Project:
         return context
 
     def _npm_asset(self, name: str) -> Path:
-        package_root = Path(str(files("md2html2"))).parent
+        package_root = Path(str(files("md2html"))).parent
         path = next((root / name for root in (package_root / "node_modules", Path.cwd() / "node_modules") if (root / name).exists()), None)
         if path is None:
-            raise ValueError("browser MathJax assets are unavailable; run npm install in the md2html2 package")
+            raise ValueError("browser MathJax assets are unavailable; run npm install in the project directory")
         return path
 
     def _browser_mathjax_bundle(self) -> Path:

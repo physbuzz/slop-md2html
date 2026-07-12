@@ -83,7 +83,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _resource(name: str) -> str:
-    return files("md2html2").joinpath(name).read_text(encoding="utf-8")
+    return files("md2html").joinpath(name).read_text(encoding="utf-8")
 
 
 def _write_example(value: str, destination: str, force: bool) -> int:
@@ -431,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.readme:
         source_readme = Path(__file__).resolve().parent.parent / "readme.md"
-        text = source_readme.read_text(encoding="utf-8") if source_readme.is_file() else metadata("md2html2").get_payload()
+        text = source_readme.read_text(encoding="utf-8") if source_readme.is_file() else metadata("md2html").get_payload()
         print(text, end="")
         return 0
     if args.example_config is not None:

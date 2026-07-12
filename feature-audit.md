@@ -1,9 +1,9 @@
-# md2html and md2html2 feature audit
+# Original and current md2html feature audit
 
 ## Summary
 
-md2html2 covers the core md2html renderer and static-site workflow with about
-52% less production Python: approximately 2,652 lines instead of 5,534. Its
+The current md2html covers the original renderer and static-site workflow with
+about 52% less production Python: approximately 2,652 lines instead of 5,534. Its
 architecture is better organized around immutable settings, one project model,
 one content renderer, and one execution/cache implementation.
 
@@ -22,14 +22,14 @@ old Python API intentionally remain outside the current design.
 
 The execution cache, Liquid/document ordering, Jekyll compatibility model,
 dependency tracking, asset handling, error recovery, and watch/serve behavior
-are materially better in md2html2. Restoring every original configuration knob
-would add complexity without improving the central architecture.
+are materially better in the current md2html. Restoring every original
+configuration knob would add complexity without improving the central architecture.
 
-The md2html2 test suite and preview-site integration build pass.
+The current md2html test suite and preview-site integration build pass.
 
 ## Feature comparison
 
-| Area | Original md2html | md2html2 | Assessment |
+| Area | Original md2html | Current md2html | Assessment |
 | --- | --- | --- | --- |
 | Default math | Static MathJax CommonHTML | Static MathJax CommonHTML | Restored. Browser MathJax, SVG, MathML, and raw output remain configurable. |
 | Execution workspace | Inline code is copied to a temporary source; file sources execute from their source directory | Inline source is copied into its page-owned cache; file-backed `{source}` refers to the original file and commands run from the containing page directory | Intended behavior. Relative files use the article's directory while executables and captured output stay in the cache. |
@@ -40,14 +40,14 @@ The md2html2 test suite and preview-site integration build pass.
 | Default image attributes | Global `images.class` and `images.width` settings | The same defaults are supported, with per-image width taking precedence and classes appended | Restored. |
 | Template feature inspection | Exposes generic `features` and `uses` structures | Exposes explicit booleans such as `md2html.has_code`, `has_toc`, and `uses_svg_math` | The newer names are more direct and do not expose renderer-only state. |
 
-The default math difference is defined in `md2html2/settings.py`. Execution is
-implemented in `md2html2/render.py`: inline source is written into the
+The default math difference is defined in `md2html/settings.py`. Execution is
+implemented in `md2html/render.py`: inline source is written into the
 workspace, file-backed source remains in its article project, and commands use
 the containing page directory as their working directory.
 
 ## Original-only commands and configuration
 
-The following original md2html features are not present in md2html2:
+The following original md2html features are not present in the current md2html:
 
 - `--no-overwrite`
 - `--verbose`
@@ -80,31 +80,31 @@ also covers much of the practical use case of the original `none` backend.
 ### Inline execution
 
 Original md2html executes an inline block only when it carries the `execute`
-flag. md2html2 executes source blocks whenever global execution is enabled,
-unless they carry `noexecute`. The current md2html2 behavior was previously
+flag. The current md2html executes source blocks whenever global execution is
+enabled, unless they carry `noexecute`. The current behavior was previously
 accepted and does not need to change.
 
 ### Cache invalidation
 
-The md2html2 execution workspace is selected primarily by source content.
-Changing a command requires `--force-execution` with `--execute`. This avoids machine- and checkout-specific
-cache invalidation and makes uploaded CI caches portable, at the cost of not
-automatically detecting command changes.
+The current md2html execution workspace is selected primarily by source content.
+Changing a command requires `--force-execution` with `--execute`. This avoids
+machine- and checkout-specific cache invalidation and makes uploaded CI caches
+portable, at the cost of not automatically detecting command changes.
 
 ### Asset copying
 
-md2html2 copies required assets automatically instead of exposing the original
+The current md2html copies required assets automatically instead of exposing the original
 `copy_assets` policy switch. This removes configuration but also removes a way
 to suppress copying.
 
 ### Error handling
 
-md2html2 omits the original strict mode. Its normal recovery policy better
+The current md2html omits the original strict mode. Its normal recovery policy better
 matches the intended behavior: report warnings and visible page errors where a
 build can continue, and abort a page only when malformed source structure makes
 safe continuation or cache cleanup impossible.
 
-## Improvements in md2html2
+## Improvements in current md2html
 
 ### Execution and caching
 
@@ -126,7 +126,7 @@ among cache, command, graph, and directive modules.
 
 ### Rendering pipeline
 
-md2html2 has distinct and consistently ordered document paths:
+The current md2html has distinct and consistently ordered document paths:
 
 - `.md` and `.markdown` files receive directives, optional Liquid, Markdown,
   and template or layout processing;
@@ -144,7 +144,7 @@ md2html2 has distinct and consistently ordered document paths:
 
 ### Native and Jekyll sites
 
-md2html2 distinguishes four output workflows while sharing the same project
+The current md2html distinguishes four output workflows while sharing the same project
 and rendering machinery:
 
 - standalone or directory pages;
@@ -163,7 +163,7 @@ Jekyll site builder.
 
 ### Watch and serve
 
-md2html2 tracks more useful live dependencies:
+The current md2html tracks more useful live dependencies:
 
 - recursive Markdown includes;
 - Liquid includes and layouts;
@@ -177,7 +177,7 @@ md2html2 tracks more useful live dependencies:
 An unknown or newly created file causes project discovery to run again. Serving
 several scattered pages exposes only their generated pages and copied assets,
 not the common source directory. The original dry-run visualization is better,
-but md2html2's live incremental behavior is better.
+but the current md2html's live incremental behavior is better.
 
 ### Assets and generated pages
 
@@ -198,7 +198,7 @@ Other improvements include:
 
 ## Jekyll limitations
 
-md2html2 remains a compatibility subset rather than an implementation of Ruby
+The current md2html remains a compatibility subset rather than an implementation of Ruby
 Jekyll. It does not currently implement:
 
 - custom collections;
@@ -222,9 +222,9 @@ with maximum gzip compression:
 | Ruby Jekyll reference | 676,833 | 42,640 |
 | Original md2html | 678,056 | 42,796 |
 | Old md2html redesign | 677,745 | 42,714 |
-| md2html2 | 557,243 | 36,696 |
+| Current md2html | 557,243 | 36,696 |
 
-The md2html2 page uses 34,791 bytes of CommonHTML CSS, 6,001 bytes gzipped,
+The current md2html page uses 34,791 bytes of CommonHTML CSS, 6,001 bytes gzipped,
 and a complete 22-file local font set. The page preloads seven font families;
 its initial compressed HTML, CSS, and preloaded-font payload is 233,709 bytes.
 Browser measurements found the same 17-pixel inline
@@ -234,7 +234,7 @@ JavaScript disabled.
 
 ## Overall assessment
 
-md2html2 is the stronger architecture. The line reduction comes primarily from
+The current md2html is the stronger architecture. The line reduction comes primarily from
 removing parallel implementations and routing standalone pages, native sites,
 Jekyll sites, templates, assets, dependencies, and execution through a small
 set of shared abstractions. It is not mainly a result of compressed naming or

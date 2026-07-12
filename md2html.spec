@@ -5,8 +5,8 @@ from PyInstaller.utils.hooks import copy_metadata
 datas = [('node_modules', 'node_modules')]
 binaries = []
 hiddenimports = []
-datas += copy_metadata('md2html2')
-for package in ('md2html2', 'pygments', 'mistune', 'liquid', 'watchdog', 'latex2mathml', 'ziamath', 'ziafont'):
+datas += copy_metadata('md2html')
+for package in ('md2html', 'pygments', 'mistune', 'liquid', 'watchdog', 'latex2mathml', 'ziamath', 'ziafont'):
     package_data, package_binaries, package_imports = collect_all(package)
     datas += package_data
     binaries += package_binaries
@@ -14,7 +14,7 @@ for package in ('md2html2', 'pygments', 'mistune', 'liquid', 'watchdog', 'latex2
 
 
 a = Analysis(
-    ['md2html2/__main__.py'],
+    ['md2html/__main__.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,

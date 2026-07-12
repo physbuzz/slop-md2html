@@ -13,10 +13,10 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from md2html2.cli import WatchGraph, _server, main, parser, settings_from_args, settings_list_from_args
-from md2html2.project import CHTML_CDN, MATHJAX_CDN, Project
-from md2html2.render import parse_frontmatter
-from md2html2.settings import ImageSettings, MathSettings, Settings, find_config, load_settings, normal_path
+from md2html.cli import WatchGraph, _server, main, parser, settings_from_args, settings_list_from_args
+from md2html.project import CHTML_CDN, MATHJAX_CDN, Project
+from md2html.render import parse_frontmatter
+from md2html.settings import ImageSettings, MathSettings, Settings, find_config, load_settings, normal_path
 
 
 def build_one(tmp_path: Path, text: str, **changes) -> str:
@@ -1248,7 +1248,7 @@ def test_custom_css_keeps_feature_css_and_highlighter_styles_are_cli_names(tmp_p
 
 
 def test_pygments_does_not_inspect_rouge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from md2html2 import highlighting
+    from md2html import highlighting
 
     def unavailable(*args, **kwargs):
         raise AssertionError("a Pygments build inspected Rouge")
@@ -1264,7 +1264,7 @@ def test_pygments_does_not_inspect_rouge(tmp_path: Path, monkeypatch: pytest.Mon
 def test_rouge_backend_uses_rouge_markup_styles_and_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ):
-    from md2html2 import highlighting
+    from md2html import highlighting
 
     class FakeRouge:
         styles = {"github.light", "github.dark", "custom"}
@@ -1289,7 +1289,7 @@ def test_rouge_backend_uses_rouge_markup_styles_and_defaults(
 
 
 def test_missing_rouge_is_a_clean_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
-    from md2html2 import highlighting, worker
+    from md2html import highlighting, worker
 
     monkeypatch.setattr(highlighting, "_rouge", None)
 
@@ -1308,7 +1308,7 @@ def test_missing_rouge_is_a_clean_error(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_missing_rouge_gem_is_a_clean_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
-    from md2html2 import highlighting, worker
+    from md2html import highlighting, worker
 
     class MissingGem:
         stdout = io.StringIO('{"ready":false,"error":"cannot load such file -- rouge"}\n')
@@ -1366,7 +1366,7 @@ def test_execution_timeout_is_configurable(tmp_path: Path, monkeypatch: pytest.M
         seen.append(kwargs["timeout"])
         return subprocess.CompletedProcess(args[0], 0, "output\n", "")
 
-    monkeypatch.setattr("md2html2.render.subprocess.run", run)
+    monkeypatch.setattr("md2html.render.subprocess.run", run)
     build_one(tmp_path, "@src(example.demo)\n", execute=True, timeout=2.5, commands={"demo": "demo {source}"})
     assert seen == [2.5]
     assert settings_from_args(parser().parse_args([str(tmp_path / "article.md"), "--timeout", "7.5"])).timeout == 7.5
@@ -1430,7 +1430,7 @@ def test_cli_selects_jekyll_modes_and_safe_defaults(tmp_path: Path, capsys: pyte
     assert "--serve requires HTML output" in capsys.readouterr().err
 
     calls = []
-    monkeypatch.setattr("md2html2.cli.watch", lambda settings, **options: calls.append((settings[0].output_mode, options)) or 0)
+    monkeypatch.setattr("md2html.cli.watch", lambda settings, **options: calls.append((settings[0].output_mode, options)) or 0)
     assert main(["--jekyll", str(site), "--serve"]) == 0
     assert main(["--jekyll-markdown", str(site), "--watch"]) == 0
     assert calls == [("jekyll", {"serve": True, "port": 8000}), ("jekyll-markdown", {"serve": False, "port": 8000})]
@@ -1605,7 +1605,7 @@ def test_shared_browser_mathjax_does_not_run_node(tmp_path: Path, monkeypatch: p
 def test_static_mathjax_without_node_is_one_clean_build_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ):
-    from md2html2 import mathjax, worker
+    from md2html import mathjax, worker
 
     mathjax._workers.clear()
     attempts = 0
@@ -1764,7 +1764,7 @@ def test_multiple_file_serve_builds_watches_and_links_every_page_without_exposin
     port = probe.getsockname()[1]
     probe.close()
     process = subprocess.Popen(
-        [sys.executable, "-u", "-m", "md2html2", "one.md", "two.md", "folder/three.md", "--serve", "--port", str(port)],
+        [sys.executable, "-u", "-m", "md2html", "one.md", "two.md", "folder/three.md", "--serve", "--port", str(port)],
         cwd=tmp_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     try:
@@ -1834,7 +1834,7 @@ def test_directory_assets_have_copy_links_and_update_under_watch(tmp_path: Path)
     page_mtime = (output / "index.html").stat().st_mtime_ns
 
     process = subprocess.Popen(
-        [sys.executable, "-m", "md2html2", "-r", str(source), "-o", str(output), "--watch"],
+        [sys.executable, "-m", "md2html", "-r", str(source), "-o", str(output), "--watch"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     try:
@@ -1858,7 +1858,7 @@ def test_pyinstaller_build_and_install_workflow_is_declared():
     specification = (root / "md2html.spec").read_text()
     assert "install: pyinstaller" in makefile
     assert "PyInstaller --clean md2html.spec" in makefile and "$(NPM) install" in makefile
-    assert "copy_metadata('md2html2')" in specification and "('node_modules', 'node_modules')" in specification
+    assert "copy_metadata('md2html')" in specification and "('node_modules', 'node_modules')" in specification
     assert "'latex2mathml'" in specification and "'ziamath'" in specification and "EXE(" in specification
     assert 'build = ["pyinstaller>=6"]' in project
 
@@ -1873,7 +1873,7 @@ def test_serve_rebuilds_a_standalone_page(tmp_path: Path):
     port = probe.getsockname()[1]
     probe.close()
     process = subprocess.Popen(
-        [sys.executable, "-m", "md2html2", str(source), "--serve", "--port", str(port)],
+        [sys.executable, "-m", "md2html", str(source), "--serve", "--port", str(port)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
 
