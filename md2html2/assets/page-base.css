@@ -255,10 +255,6 @@ body {
 .page-content table {
   max-width: 100%;
   min-width: 0;
-}
-
-.page-content pre,
-.page-content table {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -268,11 +264,19 @@ body {
 }
 
 .page-content iframe,
+.page-content img,
 .page-content video,
+.page-content svg,
 .page-content object,
 .page-content embed {
   display: block;
   max-width: 100%;
+}
+
+.page-content img,
+.page-content video,
+.page-content svg {
+  height: auto;
 }
 
 .page-content iframe[src*="youtube.com"],

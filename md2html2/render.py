@@ -192,7 +192,8 @@ class Stash:
         key = f"m{self.serial}"
         self.values[key] = value
         tag = "div" if block else "span"
-        return f'<{tag} data-md2html-token="{key}"></{tag}>'
+        suffix = "\n" if block else ""
+        return f'<{tag} data-md2html-token="{key}"></{tag}>{suffix}'
 
     def restore(self, text: str) -> str:
         for key, value in self.values.items():

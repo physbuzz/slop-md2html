@@ -1,1 +1,6 @@
-img,video,svg{max-width:100%;height:auto}.obsidian-image{display:block;margin:1rem auto}
+.obsidian-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1rem auto;
+}

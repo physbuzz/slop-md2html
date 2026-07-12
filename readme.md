@@ -697,8 +697,10 @@ md2html --templates templates article.md
 ```
 
 Because `page.css` has the same stem as `page.html`, md2html selects it
-automatically when no explicit `css` setting is present. Use another filename
-or directory if you want several designs:
+automatically when no explicit `css` setting is present. A companion stylesheet
+is treated as the complete stylesheet for its template, so md2html does not
+append another copy of the bundled feature CSS. Use another filename or
+directory if you want several designs:
 
 ```bash
 md2html --example-template templates/report.html
@@ -724,7 +726,8 @@ templates.
 ### CSS Layers
 
 The default template embeds CSS so one input produces one self-contained HTML
-file. Base CSS and generated feature CSS are separate:
+file. Base CSS and generated feature CSS are separate. Explicit `--css` files
+replace the base layer and keep the feature layer:
 
 ```bash
 # Replace base CSS but keep CSS for code, math, TOCs, images, and warnings.
@@ -744,13 +747,22 @@ md2html --no-minify-css article.md
 
 # Add an external stylesheet link.
 md2html --stylesheet styles/site.css article.md
+
+# Use only your stylesheet and the HTML template's structure.
+md2html --no-css --stylesheet styles/site.css article.md
 ```
 
 Use `"css": ["styles/base.css"]` to replace the selected template's default
-CSS. Use `"css": []` to disable template CSS while keeping feature CSS. Set
-`"feature_css": false` to disable feature CSS too. The corresponding CLI
-options are `--css`, `--no-feature-css`, and `--no-css`. Renderer-required
-CommonHTML CSS is still emitted when static math needs it.
+CSS. It does not append the bundled page design. Use `"css": []` to disable
+template CSS while keeping feature CSS. Set `"feature_css": false` to disable
+feature CSS too. The corresponding CLI options are `--css`,
+`--no-feature-css`, and `--no-css`.
+
+Math renderer CSS is a separate template layer. The bundled templates include
+it after ordinary CSS. A custom template may omit `md2html.math_css`,
+`md2html.math_stylesheets`, and `md2html.font_preloads` when it will supply its
+own CommonHTML, MathML, or SVG rules. Generated math markup will then remain in
+the document without md2html's renderer CSS.
 
 Embedded and generated shared CSS is minified by default. This happens after
 feature selection, so a standalone page first omits unused feature styles and
@@ -794,9 +806,12 @@ Standalone templates receive:
 | `content` | Rendered page body HTML. |
 | `page` | Front matter plus `title`, `name`, `url`, `path`, tags, categories, and excerpt. |
 | `site` | Configured site values and defaults. |
-| `md2html.css` | CSS selected for this page, or an empty value. |
-| `md2html.stylesheets` | Stylesheet hrefs selected for this page. |
+| `md2html.page_stylesheets` | Generated shared page stylesheet hrefs. |
+| `md2html.css` | Selected embedded base and feature CSS, or an empty value. |
+| `md2html.math_css` | Generated math renderer CSS, or an empty value. |
+| `md2html.math_stylesheets` | Generated math renderer stylesheet hrefs. |
 | `md2html.font_preloads` | Font hrefs to preload for this page. |
+| `md2html.stylesheets` | Authored stylesheet hrefs, emitted last so they can override the preceding layers. |
 | `md2html.mathjax_config` | Browser MathJax configuration JavaScript, or an empty value. |
 | `md2html.mathjax_src` | Browser MathJax script href, or an empty value. |
 | `md2html.jekyll_compatibility` | True only while md2html is directly building a Jekyll source tree. |
@@ -809,10 +824,27 @@ Standalone templates receive:
 | `md2html.has_images` | True when rendered page content contains an image. |
 | `md2html.has_warnings` | True when rendered page content contains a generated warning. |
 
-The bundled templates show the required Liquid structure for `<title>`, CSS,
-font preloads, MathJax, the filename header, and rendered content. Native site
-layouts receive the same `md2html` values. They decide where renderer assets
-belong; md2html does not search completed HTML to insert renderer assets.
+The bundled templates show the Liquid structure for `<title>`, authored
+stylesheets, selected CSS, math assets, browser MathJax, the filename header,
+and rendered content. Native site layouts receive the same `md2html` values.
+They decide where renderer assets belong; md2html does not search completed
+HTML to insert renderer assets.
+
+The complete removable math block is:
+
+```liquid
+{% for font in md2html.font_preloads %}
+<link rel="preload" href="{{ font }}" as="font" type="font/woff2" crossorigin>
+{% endfor %}
+{% for stylesheet in md2html.math_stylesheets %}
+<link rel="stylesheet" href="{{ stylesheet }}">
+{% endfor %}
+{% if md2html.math_css %}<style>{{ md2html.math_css }}</style>{% endif %}
+{% if md2html.mathjax_src %}
+<script>{{ md2html.mathjax_config }}</script>
+<script defer src="{{ md2html.mathjax_src }}"></script>
+{% endif %}
+```
 
 ## Asset Copying
 

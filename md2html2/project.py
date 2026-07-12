@@ -198,7 +198,7 @@ class Project:
                     continue
                 rendered = self._render_page(page, output_relative, url, paginator, target, result)
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(rendered.content, encoding="utf-8")
+                self._write_text(target, rendered.content)
                 if self.settings.input.is_file():
                     self._copy_page_assets(target, rendered, result)
                 if rendered.executor:
@@ -229,6 +229,12 @@ class Project:
                 raise ValueError("site output cannot be the input directory")
             if self.settings.clean and source.is_relative_to(output):
                 raise ValueError("clean site output cannot contain the input directory")
+
+    @staticmethod
+    def _write_text(target: Path, value: str) -> None:
+        temporary = target.with_name(f".{target.name}.md2html-tmp")
+        temporary.write_text(value, encoding="utf-8")
+        temporary.replace(target)
 
     def _site_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
@@ -444,6 +450,8 @@ class Project:
         page_data["title"] = rendered.title
         page.metadata["title"] = rendered.title
         md2html = self._renderer_context(rendered, target, result)
+        if not (self.settings.jekyll_mode or self.settings.markdown_mode):
+            md2html["stylesheets"] = [*self.settings.stylesheets, *self._values(page_data.get("stylesheets"))]
         if self.settings.markdown_mode:
             metadata = {**self.settings.frontmatter, **page.metadata}
             content = "---\n" + yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True) + "---\n\n" + rendered.content
@@ -599,16 +607,15 @@ class Project:
             raise ValueError(f"template not found: {name}")
         rendered.dependencies.add(path)
         css = self._css(rendered, path, page)
-        stylesheets = [*self.settings.stylesheets, *self._values(page.get("stylesheets"))]
+        page_stylesheets = []
         if self.settings.asset_mode == "shared" and "css" not in page and "template" not in page:
             stylesheet = self._output_root() / "assets/md2html/page.css"
-            stylesheets.append(Path(os.path.relpath(stylesheet, target.parent)).as_posix())
-        stylesheets.extend(md2html["stylesheets"])
+            page_stylesheets.append(Path(os.path.relpath(stylesheet, target.parent)).as_posix())
         context = {
             "site": self.site,
             "page": page,
             "content": rendered.content,
-            "md2html": {**md2html, "css": css or md2html["css"], "stylesheets": stylesheets},
+            "md2html": {**md2html, "css": css, "page_stylesheets": page_stylesheets},
         }
         try:
             return self.liquid.from_string(liquid_source(path.read_text(encoding="utf-8"))).render(**context)
@@ -642,12 +649,14 @@ class Project:
         shared = self.settings.asset_mode == "shared" if shared is None else shared
         shared = shared and "css" not in page and "template" not in page
         configured = page.get("css") if "css" in page else self.settings.css
+        companion_css = False
         if shared:
             configured = ()
         if configured is None:
             companion = template.with_suffix(".css")
             if companion.is_file():
                 paths.append(companion)
+                companion_css = True
             elif template.name == "page.html":
                 paths.append(self.bundled_assets / "page-base.css")
             elif template.name == "barebones.html":
@@ -656,7 +665,7 @@ class Project:
             for name in self._values(configured):
                 path = Path(name).expanduser()
                 paths.append(path if path.is_absolute() else self.settings.project_root / path)
-        feature_css = bool(page.get("feature_css", self.settings.feature_css)) and not shared
+        feature_css = bool(page.get("feature_css", self.settings.feature_css)) and not shared and not companion_css
         if feature_css:
             for used, name in (
                 (features.code, "code"), (features.math, "math"),
@@ -674,8 +683,6 @@ class Project:
                 raise ValueError(f"could not read CSS {path}: {error}") from error
         if feature_css and features.code:
             values.insert(1 if values else 0, syntax_css(self.settings.highlight_style, self.settings.highlight_dark_style))
-        if features.math_css and not shared:
-            values.append(self._standalone_math_css(features))
         css = "\n".join(values)
         return minify_css(css) if self.settings.minify_css else css
 
@@ -691,7 +698,7 @@ class Project:
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.is_file() or target.read_text(encoding="utf-8") != css:
-            target.write_text(css, encoding="utf-8")
+            self._write_text(target, css)
             result.written.append(target)
         self.shared_dependencies = rendered.dependencies
 
@@ -720,7 +727,10 @@ class Project:
         context: dict[str, Any] = {
             **self._feature_context(rendered.features),
             "css": None,
+            "page_stylesheets": [],
             "stylesheets": [],
+            "math_css": None,
+            "math_stylesheets": [],
             "font_preloads": [],
             "mathjax_config": None,
             "mathjax_src": None,
@@ -730,12 +740,13 @@ class Project:
         if rendered.features.math_css:
             if self.settings.asset_mode == "shared":
                 stylesheet, fonts = self._write_math_assets(rendered.features, result, target)
-                context["stylesheets"].append(stylesheet)
+                context["math_stylesheets"].append(stylesheet)
                 context["font_preloads"] = fonts
-            elif self.settings.site_mode:
-                css = (self.bundled_assets / "feature-math.css").read_text(encoding="utf-8")
-                css += "\n" + self._standalone_math_css(rendered.features)
-                context["css"] = minify_css(css) if self.settings.minify_css else css
+            else:
+                css = self._standalone_math_css(rendered.features)
+                if self.settings.site_mode:
+                    css = (self.bundled_assets / "feature-math.css").read_text(encoding="utf-8") + "\n" + css
+                context["math_css"] = minify_css(css) if self.settings.minify_css else css
         if rendered.features.math and self.settings.math.backend == "mathjax":
             context.update(self._browser_mathjax_context(rendered, target, result))
         return context
@@ -858,7 +869,7 @@ class Project:
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         css = minify_css(css) if self.settings.minify_css else css.rstrip()
-        target.write_text(css + "\n", encoding="utf-8")
+        self._write_text(target, css + "\n")
         if target not in result.written:
             result.written.append(target)
         stylesheet = self._asset_url(target, page_target)
@@ -938,5 +949,5 @@ class Project:
             entries.append(f'<entry><title>{title}</title><link href="{html.escape(url)}"/><id>{html.escape(url)}</id><updated>{self._date(post).isoformat()}</updated></entry>')
         feed = f'<?xml version="1.0" encoding="utf-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom"><title>{html.escape(str(self.site.get("title", "")))}</title>{"".join(entries)}</feed>\n'
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(feed, encoding="utf-8")
+        self._write_text(target, feed)
         result.written.append(target)

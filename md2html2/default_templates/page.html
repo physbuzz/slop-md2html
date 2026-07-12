@@ -44,11 +44,18 @@
   </script>
   {% for font in md2html.font_preloads %}<link rel="preload" href="{{ font }}" as="font" type="font/woff2" crossorigin>
   {% endfor %}
-  {% for stylesheet in md2html.stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">
+  {% for stylesheet in md2html.page_stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">
   {% endfor %}
   {% if md2html.css %}<style>
 {{ md2html.css }}
   </style>{% endif %}
+  {% for stylesheet in md2html.math_stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">
+  {% endfor %}
+  {% if md2html.math_css %}<style>
+{{ md2html.math_css }}
+  </style>{% endif %}
+  {% for stylesheet in md2html.stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">
+  {% endfor %}
   {% if md2html.mathjax_src %}<script>{{ md2html.mathjax_config }}</script>
   <script id="MathJax-script" defer src="{{ md2html.mathjax_src }}"></script>{% endif %}
 </head>

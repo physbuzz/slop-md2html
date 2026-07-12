@@ -353,7 +353,8 @@ def watch(settings: Settings | list[Settings], *, serve: bool, port: int) -> int
             for item in settings_list
         )
         copied = any(source != target and path == target for source, target in session.assets.items())
-        return generated or copied or ".md2html-cache" in path.parts or any(part in {".git", "node_modules", "__pycache__"} for part in path.parts)
+        temporary = path.name.startswith(".") and path.name.endswith(".md2html-tmp")
+        return generated or copied or temporary or ".md2html-cache" in path.parts or any(part in {".git", "node_modules", "__pycache__"} for part in path.parts)
 
     class Handler(FileSystemEventHandler):
         def on_any_event(self, event) -> None:

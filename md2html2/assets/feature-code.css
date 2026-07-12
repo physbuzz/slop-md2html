@@ -90,7 +90,7 @@ code {
   display: none;
 }
 .code-summary:hover {
-  background: var(--reader-soft);
+  background: var(--md2html-code-bg);
 }
 .code-summary::before {
   content: "►";

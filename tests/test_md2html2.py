@@ -189,7 +189,7 @@ def test_obsidian_images_and_embedded_video_are_responsive(tmp_path: Path):
     assert 'alt="A diagram" style="width:70%">' in output
     numeric = build_one(tmp_path, "![[diagram one.png|320]]\n")
     assert 'alt="diagram one" style="width:320px"' in numeric
-    assert ".obsidian-image{display:block;margin:1rem auto}" in output
+    assert ".obsidian-image{display:block;max-width:100%;height:auto;margin:1rem auto}" in output
     video = build_one(tmp_path, '<iframe src="https://www.youtube.com/embed/example"></iframe>\n')
     assert 'iframe[src*="youtube.com"]' in video
     assert "aspect-ratio:16/9" in video.replace(" ", "")
@@ -495,8 +495,11 @@ def site_fixture(tmp_path: Path) -> tuple[Path, Path]:
         '<title>{{ page.title }} | {{ site.title }}</title>'
         '<script>document.documentElement.setAttribute("data-hash-pending", "")</script>'
         '{% for font in md2html.font_preloads %}<link rel="preload" href="{{ font }}" as="font" type="font/woff2" crossorigin>{% endfor %}'
-        '{% for stylesheet in md2html.stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">{% endfor %}'
+        '{% for stylesheet in md2html.page_stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">{% endfor %}'
         '{% if md2html.css %}<style>{{ md2html.css }}</style>{% endif %}'
+        '{% for stylesheet in md2html.math_stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">{% endfor %}'
+        '{% if md2html.math_css %}<style>{{ md2html.math_css }}</style>{% endif %}'
+        '{% for stylesheet in md2html.stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">{% endfor %}'
         '{% if md2html.mathjax_src %}<script>{{ md2html.mathjax_config }}</script><script defer src="{{ md2html.mathjax_src }}"></script>{% endif %}'
         '<script defer src="/site.js"></script>',
         encoding="utf-8",
@@ -952,7 +955,29 @@ def test_template_directory_and_companion_css_take_priority(tmp_path: Path):
     (templates / "page.css").write_text("body{color:rebeccapurple}")
     output = build_one(tmp_path, "# Custom\n", templates=(templates,))
     assert "rebeccapurple" in output
+    assert ".code-box" not in output
     assert "reader-controls" not in output
+
+
+def test_source_block_does_not_consume_the_following_heading(tmp_path: Path):
+    (tmp_path / "example.py").write_text("print('example')\n")
+    output = build_one(tmp_path, "@src(example.py)\n## Next section\n")
+    assert '<h2 id="next-section">Next section</h2>' in output
+
+
+def test_custom_template_can_omit_math_renderer_assets(tmp_path: Path):
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "page.html").write_text("<style>{{ md2html.css }}</style>{{ content }}")
+    output = build_one(tmp_path, "$x^2$\n", templates=(templates,))
+    assert "<mjx-container" in output
+    assert "@font-face" not in output
+
+    (templates / "page.html").write_text(
+        "<style>{{ md2html.css }}</style><style>{{ md2html.math_css }}</style>{{ content }}"
+    )
+    output = build_one(tmp_path, "$x^2$\n", templates=(templates,))
+    assert "@font-face" in output
 
 
 def test_project_root_fallback_and_project_template_directory(tmp_path: Path):
@@ -996,6 +1021,12 @@ def test_page_frontmatter_selects_template_css_and_stylesheets(tmp_path: Path):
     assert "rebeccapurple" in output
     assert ".code-box" in output and ".codehilite .k" in output
     assert "@media print{}" in output and "<link rel=stylesheet" not in output
+
+
+def test_authored_stylesheet_follows_default_and_math_css(tmp_path: Path):
+    (tmp_path / "override.css").write_text("body{color:purple}")
+    output = build_one(tmp_path, "$x^2$\n", stylesheets=("override.css",))
+    assert output.index("mjx-container") < output.index("body{color:purple}")
 
 
 def test_directory_pages_can_choose_different_templates_and_css(tmp_path: Path):
@@ -1109,6 +1140,7 @@ def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFix
     assert '"parse_liquid": true' in (tmp_path / "md2html.json").read_text()
     assert main(["--example-template", "-"]) == 0
     assert "<!doctype html>" in capsys.readouterr().out.lower()
+    assert main(["--example-template"]) == 0
     assert main(["--example-css"]) == 0
     example_css = (tmp_path / "templates/page.css").read_text()
     assert ".reader-widget form" in example_css
@@ -1119,6 +1151,7 @@ def test_cli_short_flags_and_scaffolds(tmp_path: Path, capsys: pytest.CaptureFix
     assert main([str(source), "--templates", "templates"]) == 0
     generated = source.with_suffix(".html").read_text()
     assert '<main class="container">' in generated and "--reader-text-size" in generated
+    assert generated.count(".code-box .codehilite{") == 1
 
 
 def test_cli_selects_jekyll_modes_and_safe_defaults(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch):
