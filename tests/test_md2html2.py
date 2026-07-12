@@ -110,6 +110,8 @@ def test_mathjax_chtml_is_static_and_standalone(tmp_path: Path):
 def test_browser_and_raw_math_backends(tmp_path: Path, backend: str, expected: str, absent: str):
     output = build_one(tmp_path, "$x+1$\n", math=MathSettings(backend))
     assert expected in output and absent not in output
+    if backend == "mathjax":
+        assert '.math.display-math.math-mathjax mjx-container[display="true"]{margin:0}' in output
 
 
 def test_code_and_comments_do_not_become_liquid(tmp_path: Path):

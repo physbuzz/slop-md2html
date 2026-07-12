@@ -62,7 +62,8 @@
   text-align: center;
 }
 
-.math.display-math.math-mathjax-chtml mjx-container[display="true"] {
+.math.display-math.math-mathjax-chtml mjx-container[display="true"],
+.math.display-math.math-mathjax mjx-container[display="true"] {
   margin: 0;
 }
 
