@@ -15,6 +15,7 @@
 }
 
 .math-copy-source {
+  position: absolute;
   display: inline-block;
   width: 0;
   height: 0;

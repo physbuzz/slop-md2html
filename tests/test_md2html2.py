@@ -72,6 +72,7 @@ def test_math_is_shielded_and_only_adds_assets_when_used(tmp_path: Path):
     assert '<div class="math display-math' in output
     assert "data-md2html-token" not in output
     assert "<em>" not in output
+    assert ".math-copy-source{position:absolute" in output
 
 
 @pytest.mark.parametrize("backend, marker", [("mathml", "<math"), ("svg", "<svg")])
