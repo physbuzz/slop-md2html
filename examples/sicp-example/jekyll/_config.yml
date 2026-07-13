@@ -1,5 +1,0 @@
-# md2html emits math as $...$ / $$...$$ verbatim (jekyll.math: passthrough).
-# Disable kramdown's math engine so the delimiters reach the browser instead
-# of being rewritten to \[...\]; MathJax in the layout handles them.
-kramdown:
-  math_engine: ~
