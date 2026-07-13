@@ -1,3 +1,6 @@
+> [!WARNING]  
+> I used gpt 5.6 and Claude for this. I did a few rewrites to cut it from 5.6k lines to about 2.3k lines, but it was indeed vibecoded.
+
 # md2html 2.0
 
 `md2html` turns Markdown notes into standalone HTML pages, a small static site, or Markdown for Jekyll to render. It's aimed at quick math notes, so on my personal computer I can do `md2html notes.md && upload notes.html` and have a shareable link to a beautiful standalone webpage ready. By default this is an offline standalone page with static CommonHTML and the relevant math fonts embedded, but you can configure it however. While I'm writing textbook notes, I'll have `md2html -erf sicp -o html --serve` running in the background, so I can watch the page update as I code and take notes.
