@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "md2html"
+version = "2.0.0a1"
+description = "A small, native Markdown page and static-site builder."
+readme = "readme.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "mistune>=3.0",
+  "Pygments>=2.15",
+  "PyYAML>=6.0",
+  "python-liquid>=2.3",
+  "watchdog>=4.0",
+  "latex2mathml>=3.81",
+  "ziamath>=0.13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+build = ["pyinstaller>=6"]
+
+[project.scripts]
+md2html = "md2html.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["md2html*"]
+
+[tool.setuptools.package-data]
+md2html = ["assets/*.css", "default_templates/*.html", "scripts/*.mjs", "scripts/*.rb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore:path is deprecated.*:DeprecationWarning:ziamath.*"]
